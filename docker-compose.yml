@@ -1,0 +1,43 @@
+services:
+  # PostgreSQL
+  db:
+    image: postgres:17
+    container_name: postgres_db
+    restart: always
+
+    environment:
+      POSTGRES_DB: aiDB
+      POSTGRES_USER: shubham
+      POSTGRES_PASSWORD: shub123
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # Adminer (GUI for PostgreSQL)
+  adminer:
+    image: adminer
+    container_name: adminer
+    restart: always
+
+    ports:
+      - "8080:8080"
+
+  # Qdrant Vector Database
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant_db
+    restart: always
+
+    ports:
+      - "6333:6333"   # REST API
+      - "6334:6334"   # gRPC (optional)
+
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+volumes:
+  postgres_data:
+  qdrant_data:
