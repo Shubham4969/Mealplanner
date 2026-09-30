@@ -1,36 +1,155 @@
-import React from "react";
+import React, { useCallback, useState } from "react";
 import {
+  ActivityIndicator,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from "react-native";
+import { useFocusEffect } from "expo-router";
 
 import { useTheme } from "../context/ThemeContext";
+import {
+  getApiErrorMessage,
+  getNutrition,
+  NutritionResponse,
+} from "../services/api";
 
-const macros = [
-  {
-    name: "Protein",
-    value: "82",
-    unit: "g",
-    icon: "💪",
-  },
-  {
-    name: "Carbs",
-    value: "235",
-    unit: "g",
-    icon: "🌾",
-  },
-  {
-    name: "Fat",
-    value: "61",
-    unit: "g",
-    icon: "🥑",
-  },
-];
+const USER_ID = 1;
 
 export default function NutritionScreen() {
   const { colors } = useTheme();
+
+  const [nutrition, setNutrition] = useState<NutritionResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState("");
+
+  const loadNutrition = useCallback(async () => {
+    try {
+      setError("");
+
+      const response = await getNutrition(USER_ID);
+
+      console.log("🥗 Nutrition response:", response);
+
+      setNutrition(response);
+    } catch (err) {
+      console.error("❌ Nutrition load error:", err);
+      setError(getApiErrorMessage(err));
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadNutrition();
+    }, [loadNutrition])
+  );
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await loadNutrition();
+  };
+
+  if (loading) {
+    return (
+      <View
+        style={[
+          styles.center,
+          { backgroundColor: colors.background },
+        ]}
+      >
+        <ActivityIndicator size="large" color="#208AEF" />
+        <Text
+          style={[
+            styles.loadingText,
+            { color: colors.textSecondary },
+          ]}
+        >
+          Loading nutrition...
+        </Text>
+      </View>
+    );
+  }
+
+  if (!nutrition) {
+    return (
+      <ScrollView
+        style={[
+          styles.container,
+          { backgroundColor: colors.background },
+        ]}
+        contentContainerStyle={styles.centerContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+          />
+        }
+      >
+        <Text style={[styles.errorTitle, { color: colors.text }]}>
+          Unable to load nutrition
+        </Text>
+
+        <Text
+          style={[
+            styles.errorText,
+            { color: colors.textSecondary },
+          ]}
+        >
+          {error || "Please try again."}
+        </Text>
+      </ScrollView>
+    );
+  }
+
+  const calories = nutrition.consumed.calories;
+  const calorieTarget = nutrition.daily_target.calories;
+  const calorieProgress =
+    calorieTarget > 0
+      ? Math.min(calories / calorieTarget, 1)
+      : 0;
+
+  const macros = [
+    {
+      name: "Protein",
+      value: nutrition.consumed.protein,
+      target: nutrition.daily_target.protein,
+      unit: "g",
+      icon: "💪",
+    },
+    {
+      name: "Carbs",
+      value: nutrition.consumed.carbohydrates,
+      target: nutrition.daily_target.carbohydrates,
+      unit: "g",
+      icon: "🌾",
+    },
+    {
+      name: "Fat",
+      value: nutrition.consumed.fat,
+      target: nutrition.daily_target.fat,
+      unit: "g",
+      icon: "🥑",
+    },
+  ];
+
+  const proteinStatus = getMacroStatus(
+    nutrition.consumed.protein,
+    nutrition.daily_target.protein
+  );
+
+  const calorieStatus =
+    calories >= calorieTarget
+      ? "Target reached"
+      : `${Math.max(
+          0,
+          Math.round(nutrition.remaining.calories)
+        )} kcal remaining`;
 
   return (
     <ScrollView
@@ -41,6 +160,12 @@ export default function NutritionScreen() {
         },
       ]}
       contentContainerStyle={styles.content}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={handleRefresh}
+        />
+      }
     >
       <Text
         style={[
@@ -61,22 +186,32 @@ export default function NutritionScreen() {
           },
         ]}
       >
-        Example daily nutrition summary.
+        Today's nutrition based on meals you have consumed.
       </Text>
 
       <View style={styles.calorieCard}>
         <Text style={styles.label}>DAILY CALORIES</Text>
 
         <Text style={styles.calories}>
-          1,850 kcal
+          {formatNumber(calories)} kcal
         </Text>
 
         <View style={styles.progressBackground}>
-          <View style={styles.progress} />
+          <View
+            style={[
+              styles.progress,
+              { width: `${calorieProgress * 100}%` },
+            ]}
+          />
         </View>
 
         <Text style={styles.progressText}>
-          1,850 of 2,200 kcal
+          {formatNumber(calories)} of{" "}
+          {formatNumber(calorieTarget)} kcal
+        </Text>
+
+        <Text style={styles.remainingText}>
+          {calorieStatus}
         </Text>
       </View>
 
@@ -92,53 +227,134 @@ export default function NutritionScreen() {
       </Text>
 
       <View style={styles.grid}>
-        {macros.map((macro) => (
-          <View
-            key={macro.name}
-            style={[
-              styles.macroCard,
-              {
-                backgroundColor: colors.card,
-                borderColor: colors.border,
-              },
-            ]}
-          >
-            <Text style={styles.icon}>{macro.icon}</Text>
+        {macros.map((macro) => {
+          const progress =
+            macro.target > 0
+              ? Math.min(macro.value / macro.target, 1)
+              : 0;
 
-            <Text
+          return (
+            <View
+              key={macro.name}
               style={[
-                styles.macroName,
+                styles.macroCard,
                 {
-                  color: colors.textSecondary,
+                  backgroundColor: colors.card,
+                  borderColor: colors.border,
                 },
               ]}
             >
-              {macro.name}
-            </Text>
+              <Text style={styles.icon}>{macro.icon}</Text>
 
-            <Text
-              style={[
-                styles.macroValue,
-                {
-                  color: colors.text,
-                },
-              ]}
-            >
-              {macro.value}
               <Text
                 style={[
-                  styles.unit,
+                  styles.macroName,
                   {
                     color: colors.textSecondary,
                   },
                 ]}
               >
-                {" "}
-                {macro.unit}
+                {macro.name}
               </Text>
-            </Text>
-          </View>
-        ))}
+
+              <Text
+                style={[
+                  styles.macroValue,
+                  {
+                    color: colors.text,
+                  },
+                ]}
+              >
+                {formatNumber(macro.value)}
+                <Text
+                  style={[
+                    styles.unit,
+                    {
+                      color: colors.textSecondary,
+                    },
+                  ]}
+                >
+                  {" "}
+                  {macro.unit}
+                </Text>
+              </Text>
+
+              <Text
+                style={[
+                  styles.targetText,
+                  {
+                    color: colors.textSecondary,
+                  },
+                ]}
+              >
+                {formatNumber(macro.target)} {macro.unit} target
+              </Text>
+
+              <View style={styles.smallProgressBackground}>
+                <View
+                  style={[
+                    styles.smallProgress,
+                    { width: `${progress * 100}%` },
+                  ]}
+                />
+              </View>
+            </View>
+          );
+        })}
+      </View>
+
+      <Text
+        style={[
+          styles.sectionTitle,
+          {
+            color: colors.text,
+          },
+        ]}
+      >
+        Remaining
+      </Text>
+
+      <View
+        style={[
+          styles.remainingCard,
+          {
+            backgroundColor: colors.card,
+            borderColor: colors.border,
+          },
+        ]}
+      >
+        <RemainingRow
+          label="Calories"
+          value={`${formatNumber(
+            nutrition.remaining.calories
+          )} kcal`}
+          colors={colors}
+        />
+
+        <RemainingRow
+          label="Protein"
+          value={`${formatNumber(
+            nutrition.remaining.protein
+          )} g`}
+          colors={colors}
+        />
+
+        <RemainingRow
+          label="Carbs"
+          value={`${formatNumber(
+            nutrition.remaining.carbohydrates
+          )} g`}
+          colors={colors}
+        />
+
+        <RemainingRow
+          label="Fat"
+          value={`${formatNumber(
+            nutrition.remaining.fat
+          )} g`}
+          colors={colors}
+          last
+        />
       </View>
 
       <Text
@@ -163,27 +379,86 @@ export default function NutritionScreen() {
       >
         <AnalysisRow
           label="Protein"
-          value="Good"
-          description="Protein intake is on track."
+          value={proteinStatus}
+          description={
+            nutrition.consumed.protein >=
+            nutrition.daily_target.protein * 0.7
+              ? "Protein intake is on track."
+              : "More protein may be needed to reach today's target."
+          }
+          colors={colors}
+        />
+
+        <AnalysisRow
+          label="Calories"
+          value={
+            calories >= calorieTarget ? "Target reached" : "In progress"
+          }
+          description={
+            calories >= calorieTarget
+              ? "You have reached today's calorie target."
+              : `${formatNumber(
+                  nutrition.remaining.calories
+                )} kcal remain based on the current target.`
+          }
           colors={colors}
         />
 
         <AnalysisRow
           label="Fiber"
-          value="Moderate"
-          description="Consider adding more vegetables and whole grains."
-          colors={colors}
-        />
-
-        <AnalysisRow
-          label="Added Sugar"
-          value="Low"
-          description="Good control of added sugar."
+          value="Not available"
+          description="Fiber is not included in the current meal-plan nutrition data."
           colors={colors}
           last
         />
       </View>
+
+      {error ? (
+        <Text
+          style={[
+            styles.footerError,
+            { color: colors.textSecondary },
+          ]}
+        >
+          {error}
+        </Text>
+      ) : null}
     </ScrollView>
+  );
+}
+
+function RemainingRow({
+  label,
+  value,
+  colors,
+  last = false,
+}: {
+  label: string;
+  value: string;
+  colors: any;
+  last?: boolean;
+}) {
+  return (
+    <View
+      style={[
+        styles.remainingRow,
+        !last && {
+          borderBottomColor: colors.divider,
+        },
+        last && styles.lastRemainingRow,
+      ]}
+    >
+      <Text
+        style={[
+          styles.remainingLabel,
+          { color: colors.text },
+        ]}
+      >
+        {label}
+      </Text>
+
+      <Text style={styles.remainingValue}>{value}</Text>
+    </View>
   );
 }
 
@@ -241,9 +516,75 @@ function AnalysisRow({
   );
 }
 
+function getMacroStatus(
+  value: number,
+  target: number
+): string {
+  if (target <= 0) {
+    return "No target";
+  }
+
+  const ratio = value / target;
+
+  if (ratio >= 0.9) {
+    return "Good";
+  }
+
+  if (ratio >= 0.7) {
+    return "Moderate";
+  }
+
+  return "Low";
+}
+
+function formatNumber(value: number): string {
+  if (!Number.isFinite(value)) {
+    return "0";
+  }
+
+  if (Number.isInteger(value)) {
+    return value.toLocaleString();
+  }
+
+  return value.toLocaleString(undefined, {
+    maximumFractionDigits: 1,
+  });
+}
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+
+  center: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 30,
+  },
+
+  centerContent: {
+    flexGrow: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 30,
+  },
+
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+  },
+
+  errorTitle: {
+    fontSize: 22,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+
+  errorText: {
+    marginTop: 8,
+    textAlign: "center",
+    lineHeight: 20,
   },
 
   content: {
@@ -260,9 +601,8 @@ const styles = StyleSheet.create({
   subtitle: {
     marginTop: 7,
     marginBottom: 20,
+    lineHeight: 19,
   },
-
-  /* ---------------- CALORIE CARD ---------------- */
 
   calorieCard: {
     backgroundColor: "#208AEF",
@@ -293,7 +633,6 @@ const styles = StyleSheet.create({
   },
 
   progress: {
-    width: "84%",
     height: "100%",
     backgroundColor: "#FFFFFF",
     borderRadius: 10,
@@ -305,15 +644,18 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
 
-  /* ---------------- SECTION ---------------- */
+  remainingText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "700",
+    marginTop: 5,
+  },
 
   sectionTitle: {
     fontSize: 20,
     fontWeight: "800",
     marginBottom: 13,
   },
-
-  /* ---------------- MACROS ---------------- */
 
   grid: {
     flexDirection: "row",
@@ -349,7 +691,54 @@ const styles = StyleSheet.create({
     fontWeight: "500",
   },
 
-  /* ---------------- ANALYSIS ---------------- */
+  targetText: {
+    fontSize: 10,
+    marginTop: 7,
+  },
+
+  smallProgressBackground: {
+    height: 5,
+    marginTop: 8,
+    borderRadius: 10,
+    backgroundColor: "rgba(128,128,128,0.2)",
+    overflow: "hidden",
+  },
+
+  smallProgress: {
+    height: "100%",
+    borderRadius: 10,
+    backgroundColor: "#208AEF",
+  },
+
+  remainingCard: {
+    borderRadius: 18,
+    paddingHorizontal: 18,
+    borderWidth: 1,
+    elevation: 1,
+    marginBottom: 25,
+  },
+
+  remainingRow: {
+    paddingVertical: 14,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    borderBottomWidth: 1,
+  },
+
+  lastRemainingRow: {
+    borderBottomWidth: 0,
+  },
+
+  remainingLabel: {
+    fontSize: 14,
+    fontWeight: "700",
+  },
+
+  remainingValue: {
+    color: "#208AEF",
+    fontSize: 14,
+    fontWeight: "800",
+  },
 
   analysisCard: {
     borderRadius: 18,
@@ -387,5 +776,11 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 19,
     marginTop: 5,
+  },
+
+  footerError: {
+    marginTop: 15,
+    textAlign: "center",
+    fontSize: 12,
   },
 });

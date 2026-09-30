@@ -1,49 +1,94 @@
-import React, { useEffect, useState } from "react";
+
+import React, {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+
 import {
+  ActivityIndicator,
   Alert,
+  Animated,
   Pressable,
-  ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   View,
 } from "react-native";
 
+import { SafeAreaView } from "react-native-safe-area-context";
+
 import {
   AudioModule,
   RecordingPresets,
+  createAudioPlayer,
   setAudioModeAsync,
   useAudioRecorder,
   useAudioRecorderState,
 } from "expo-audio";
 
-import { useTheme } from "../context/ThemeContext";
+import { Mic, X, SlidersHorizontal } from "lucide-react-native";
+import { router } from "expo-router";
+
+import {
+  sendChatMessage,
+  transcribeAudio,
+  textToSpeech,
+} from "../services/api";
+
+const USER_ID = 1;
+const SILENCE_DURATION_MS = 1800;
+const MAX_RECORDING_MS = 30000;
+const SPEECH_THRESHOLD_DB = -42;
 
 export default function VoiceScreen() {
-  const { colors } = useTheme();
+  const recorder = useAudioRecorder({
+    ...RecordingPresets.HIGH_QUALITY,
+    isMeteringEnabled: true,
+  });
 
-  const recorder = useAudioRecorder(
-    RecordingPresets.HIGH_QUALITY
+  const recorderState = useAudioRecorderState(recorder, 200);
+
+  const [permissionGranted, setPermissionGranted] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isThinking, setIsThinking] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [transcript, setTranscript] = useState("");
+  const [answer, setAnswer] = useState("");
+  const [statusText, setStatusText] = useState(
+    "Tap the microphone and start speaking"
   );
 
-  const recorderState =
-    useAudioRecorderState(recorder);
+  const recordingRef = useRef(false);
+  const processingRef = useRef(false);
+  const speechDetectedRef = useRef(false);
+  const mountedRef = useRef(true);
 
-  const [permissionGranted, setPermissionGranted] =
-    useState(false);
+  const silenceTimerRef =
+    useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [recordingUri, setRecordingUri] =
-    useState<string | null>(null);
+  const maxTimerRef =
+    useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const pulse = useRef(new Animated.Value(1)).current;
+
+  // Request microphone permission.
   useEffect(() => {
+    mountedRef.current = true;
+
     async function setupAudio() {
       try {
         const permission =
           await AudioModule.requestRecordingPermissionsAsync();
 
+        if (!mountedRef.current) return;
+
         if (!permission.granted) {
           Alert.alert(
-            "Microphone permission",
-            "Microphone permission is required."
+            "Microphone Permission",
+            "Please allow microphone access to use Voice Assistant."
           );
           return;
         }
@@ -51,376 +96,698 @@ export default function VoiceScreen() {
         setPermissionGranted(true);
 
         await setAudioModeAsync({
+          allowsRecording: false,
           playsInSilentMode: true,
-          allowsRecording: true,
         });
-      } catch {
-        Alert.alert(
-          "Audio error",
-          "Unable to initialize microphone."
-        );
+      } catch (error) {
+        console.error("Audio setup error:", error);
+
+        if (mountedRef.current) {
+          Alert.alert(
+            "Audio Error",
+            "Unable to initialize the microphone."
+          );
+        }
       }
     }
 
-    setupAudio();
+    void setupAudio();
+
+    return () => {
+      mountedRef.current = false;
+    };
   }, []);
 
-  const startRecording = async () => {
-    if (!permissionGranted) {
-      Alert.alert(
-        "Permission required",
-        "Please allow microphone access."
-      );
+  // Animate the voice orb.
+  useEffect(() => {
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, {
+          toValue: 1.05,
+          duration: 1200,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulse, {
+          toValue: 1,
+          duration: 1200,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+
+    animation.start();
+
+    return () => animation.stop();
+  }, [pulse]);
+
+  const clearTimers = useCallback(() => {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+
+    if (maxTimerRef.current) {
+      clearTimeout(maxTimerRef.current);
+      maxTimerRef.current = null;
+    }
+  }, []);
+
+  // Record -> transcribe -> AI response -> speak response.
+  const stopAndSubmit = useCallback(async () => {
+    if (!recordingRef.current || processingRef.current) {
       return;
     }
 
-    try {
-      await recorder.prepareToRecordAsync();
-      recorder.record();
-    } catch {
-      Alert.alert(
-        "Recording error",
-        "Unable to start recording."
-      );
-    }
-  };
+    processingRef.current = true;
+    clearTimers();
 
-  const stopRecording = async () => {
     try {
+      setStatusText("Finishing your question...");
+
       await recorder.stop();
 
-      setRecordingUri(recorder.uri ?? null);
-    } catch {
-      Alert.alert(
-        "Recording error",
-        "Unable to stop recording."
+      recordingRef.current = false;
+      setIsRecording(false);
+
+      const recordedUri = recorder.uri;
+
+      await setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
+      });
+
+      if (!recordedUri) {
+        throw new Error(
+          "No recording was saved. Please try again."
+        );
+      }
+
+      const FileSystem = await import("expo-file-system/legacy");
+      const fileInfo = await FileSystem.getInfoAsync(recordedUri);
+
+      if (
+        !fileInfo.exists ||
+        !("size" in fileInfo) ||
+        fileInfo.size <= 0
+      ) {
+        throw new Error(
+          "The recording is empty. Please try again."
+        );
+      }
+
+      // STEP 1: Convert recorded audio to text.
+      setIsTranscribing(true);
+      setStatusText("Transcribing your question...");
+
+      const recognizedText = (
+        await transcribeAudio(recordedUri)
+      ).trim();
+
+      if (!recognizedText) {
+        throw new Error(
+          "No speech was detected. Please try again."
+        );
+      }
+
+      console.log("Recognized question:", recognizedText);
+
+      setTranscript(recognizedText);
+      setIsTranscribing(false);
+
+      // STEP 2: Send the question to your FastAPI /chat endpoint.
+      setIsThinking(true);
+      setStatusText("Meal Planner is thinking...");
+
+      const result = await sendChatMessage(
+        recognizedText,
+        USER_ID
       );
+
+      const responseText = String(
+        result.response ?? result.message ?? ""
+      ).trim();
+
+      if (!responseText) {
+        throw new Error(
+          "Meal Planner returned an empty answer."
+        );
+      }
+
+      setAnswer(responseText);
+      setIsThinking(false);
+
+      // STEP 3: Generate speech using the FastAPI /tts endpoint.
+      setStatusText("Preparing your voice response...");
+
+      const audioBase64 = await textToSpeech(responseText);
+
+      if (!audioBase64) {
+        throw new Error(
+          "The server returned no speech audio."
+        );
+      }
+
+      // STEP 4: Save the MP3 audio locally on the phone.
+      const audioUri =
+        `${FileSystem.cacheDirectory}meal_planner_reply_${Date.now()}.mp3`;
+
+      await FileSystem.writeAsStringAsync(
+        audioUri,
+        audioBase64,
+        {
+          encoding: FileSystem.EncodingType.Base64,
+        }
+      );
+
+      // STEP 5: Play the audio on the phone.
+      await setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
+      });
+
+      setIsSpeaking(true);
+      setStatusText("Meal Planner is speaking...");
+
+      
+const player = createAudioPlayer({ uri: audioUri });
+
+try {
+  // Make sure the player is not muted.
+  player.volume = 1;
+  player.muted = false;
+
+  console.log("TTS Base64 length:", audioBase64.length);
+  console.log("Saved audio URI:", audioUri);
+
+  const audioInfo = await FileSystem.getInfoAsync(audioUri);
+  console.log("Saved audio file:", audioInfo);
+
+  if (
+    !audioInfo.exists ||
+    !("size" in audioInfo) ||
+    audioInfo.size <= 0
+  ) {
+    throw new Error("The generated audio file is empty.");
+  }
+
+  setIsSpeaking(true);
+  setStatusText("Meal Planner is speaking...");
+
+  await new Promise<void>((resolve, reject) => {
+    let finished = false;
+
+    const subscription = player.addListener(
+      "playbackStatusUpdate",
+      (status) => {
+        console.log("Audio playback status:", status);
+
+        if (status.didJustFinish && !finished) {
+          finished = true;
+          subscription.remove();
+          resolve();
+        }
+      }
+    );
+
+    try {
+      player.play();
+    } catch (error) {
+      if (!finished) {
+        finished = true;
+        subscription.remove();
+
+        reject(
+          error instanceof Error
+            ? error
+            : new Error("Audio playback failed.")
+        );
+      }
+    }
+  });
+} finally {
+  player.remove();
+  setIsSpeaking(false);
+
+      }
+
+      setStatusText(
+        "Tap the microphone to ask another question"
+      );
+
+      console.log("Voice response finished.");
+    } catch (error) {
+      console.error("Voice assistant error:", error);
+
+      setStatusText("Tap the microphone to try again");
+
+      if (mountedRef.current) {
+        Alert.alert(
+          "Voice Assistant Error",
+          error instanceof Error
+            ? error.message
+            : "Unable to process your voice query."
+        );
+      }
+    } finally {
+      clearTimers();
+
+      recordingRef.current = false;
+      processingRef.current = false;
+
+      if (mountedRef.current) {
+        setIsRecording(false);
+        setIsTranscribing(false);
+        setIsThinking(false);
+        setIsSpeaking(false);
+
+        try {
+          await setAudioModeAsync({
+            allowsRecording: false,
+            playsInSilentMode: true,
+          });
+        } catch (error) {
+          console.warn("Could not restore audio mode:", error);
+        }
+      }
+    }
+  }, [clearTimers, recorder]);
+
+  // Automatically stop after the user pauses speaking.
+  useEffect(() => {
+    if (!isRecording || !recordingRef.current) return;
+
+    const level = recorderState.metering;
+
+    if (typeof level !== "number" || !Number.isFinite(level)) {
+      return;
+    }
+
+    if (level > SPEECH_THRESHOLD_DB) {
+      speechDetectedRef.current = true;
+
+      if (silenceTimerRef.current) {
+        clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = null;
+      }
+
+      setStatusText("Listening... pause when you finish");
+      return;
+    }
+
+    if (
+      !speechDetectedRef.current ||
+      silenceTimerRef.current
+    ) {
+      return;
+    }
+
+    silenceTimerRef.current = setTimeout(() => {
+      silenceTimerRef.current = null;
+      void stopAndSubmit();
+    }, SILENCE_DURATION_MS);
+  }, [
+    recorderState.metering,
+    isRecording,
+    stopAndSubmit,
+  ]);
+
+  // Safety timeout for recordings.
+  useEffect(() => {
+    if (!isRecording) return;
+
+    maxTimerRef.current = setTimeout(() => {
+      void stopAndSubmit();
+    }, MAX_RECORDING_MS);
+
+    return () => {
+      if (maxTimerRef.current) {
+        clearTimeout(maxTimerRef.current);
+        maxTimerRef.current = null;
+      }
+    };
+  }, [isRecording, stopAndSubmit]);
+
+  // Stop recording if this screen is closed.
+  useEffect(() => {
+    return () => {
+      clearTimers();
+
+      if (recordingRef.current) {
+        void recorder.stop().catch(() => undefined);
+      }
+    };
+  }, [clearTimers, recorder]);
+
+  const startRecording = async () => {
+    if (processingRef.current || recordingRef.current) {
+      return;
+    }
+
+    processingRef.current = true;
+
+    try {
+      if (!permissionGranted) {
+        const permission =
+          await AudioModule.requestRecordingPermissionsAsync();
+
+        if (!permission.granted) {
+          Alert.alert(
+            "Permission Required",
+            "Please allow microphone access in Android Settings."
+          );
+          return;
+        }
+
+        setPermissionGranted(true);
+      }
+
+      setTranscript("");
+      setAnswer("");
+      setStatusText("Starting microphone...");
+
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+      });
+
+      clearTimers();
+      speechDetectedRef.current = false;
+
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+
+      recordingRef.current = true;
+      setIsRecording(true);
+
+      setStatusText("Listening... speak your question");
+
+      console.log("Voice recording started.");
+    } catch (error) {
+      console.error("Could not start recording:", error);
+
+      Alert.alert(
+        "Recording Error",
+        error instanceof Error
+          ? error.message
+          : "Unable to start recording."
+      );
+
+      try {
+        await setAudioModeAsync({
+          allowsRecording: false,
+          playsInSilentMode: true,
+        });
+      } catch {
+        // Ignore audio-mode cleanup errors.
+      }
+    } finally {
+      processingRef.current = false;
     }
   };
 
-  const isRecording = recorderState.isRecording;
+  const handleMicPress = () => {
+    if (recordingRef.current) {
+      void stopAndSubmit();
+    } else {
+      void startRecording();
+    }
+  };
+
+  const handleClose = async () => {
+    clearTimers();
+
+    if (recordingRef.current && !processingRef.current) {
+      processingRef.current = true;
+
+      try {
+        await recorder.stop();
+        recordingRef.current = false;
+
+        await setAudioModeAsync({
+          allowsRecording: false,
+          playsInSilentMode: true,
+        });
+      } catch (error) {
+        console.warn("Error closing recorder:", error);
+      } finally {
+        processingRef.current = false;
+      }
+    }
+
+    router.back();
+  };
+
+  const busy =
+    isTranscribing || isThinking || isSpeaking;
+
+  const displayedStatus = isTranscribing
+    ? "Transcribing your question..."
+    : isSpeaking
+      ? "Meal Planner is speaking..."
+      : isThinking
+        ? "Meal Planner is thinking..."
+        : statusText;
 
   return (
-    <ScrollView
-      style={[
-        styles.container,
-        {
-          backgroundColor: colors.background,
-        },
-      ]}
-      contentContainerStyle={styles.content}
+    <SafeAreaView
+      style={styles.safeArea}
+      edges={["top", "bottom"]}
     >
-      <Text
-        style={[
-          styles.title,
-          {
-            color: colors.text,
-          },
-        ]}
-      >
-        Voice Assistant
-      </Text>
+      <StatusBar
+        barStyle="dark-content"
+        backgroundColor="#FFFFFF"
+      />
 
-      <Text
-        style={[
-          styles.subtitle,
-          {
-            color: colors.textSecondary,
-          },
-        ]}
-      >
-        Speak naturally with your Meal Planner.
-      </Text>
-
-      <View
-        style={[
-          styles.voiceCard,
-          {
-            backgroundColor: colors.card,
-            borderColor: colors.border,
-          },
-        ]}
-      >
-        <View
-          style={[
-            styles.microphone,
-            {
-              backgroundColor: isRecording
-                ? colors.dangerLight
-                : colors.cardSecondary,
-            },
-          ]}
-        >
-          <Text style={styles.microphoneText}>
-            {isRecording ? "🔴" : "🎙️"}
-          </Text>
-        </View>
-
-        <Text
-          style={[
-            styles.voiceTitle,
-            {
-              color: colors.text,
-            },
-          ]}
-        >
-          {isRecording
-            ? "Listening..."
-            : "Ready to listen"}
-        </Text>
-
-        <Text
-          style={[
-            styles.voiceDescription,
-            {
-              color: colors.textSecondary,
-            },
-          ]}
-        >
-          {isRecording
-            ? "Speak your meal planning request."
-            : "Tap the button and start speaking."}
-        </Text>
-
+      <View style={styles.container}>
         <Pressable
-          style={[
-            styles.recordButton,
-            {
-              backgroundColor: isRecording
-                ? colors.danger
-                : "#208AEF",
-            },
-          ]}
-          onPress={
-            isRecording
-              ? stopRecording
-              : startRecording
+          style={styles.settingsButton}
+          onPress={() =>
+            Alert.alert(
+              "Voice Assistant",
+              "Speak naturally. Recording stops after a short pause. Meal Planner will process your question and speak its response."
+            )
           }
         >
-          <Text style={styles.recordText}>
-            {isRecording
-              ? "Stop Recording"
-              : "Start Recording"}
-          </Text>
+          <SlidersHorizontal
+            size={20}
+            color="#777777"
+          />
         </Pressable>
-      </View>
 
-      {recordingUri && (
-        <View
-          style={[
-            styles.resultCard,
-            {
-              backgroundColor: colors.card,
-              borderColor: colors.border,
-            },
-          ]}
-        >
-          <Text
+        <View style={styles.centerContent}>
+          <Animated.View
             style={[
-              styles.resultTitle,
+              styles.orb,
+              isRecording && styles.activeOrb,
               {
-                color: colors.text,
+                transform: [
+                  { scale: isRecording ? pulse : 1 },
+                ],
               },
             ]}
           >
-            Recording created
+            <View style={styles.orbBlue} />
+            <View style={styles.orbHighlight} />
+          </Animated.View>
+
+          <Text style={styles.statusText}>
+            {displayedStatus}
           </Text>
 
-          <Text
-            style={[
-              styles.uri,
-              {
-                color: colors.textSecondary,
-              },
-            ]}
-            numberOfLines={3}
-          >
-            {recordingUri}
-          </Text>
+          {transcript !== "" && (
+            <View style={styles.resultCard}>
+              <Text style={styles.resultLabel}>
+                YOU SAID
+              </Text>
+              <Text style={styles.resultText}>
+                {transcript}
+              </Text>
+            </View>
+          )}
 
-          <Text
-            style={[
-              styles.note,
-              {
-                color: colors.textSecondary,
-              },
-            ]}
-          >
-            This audio will later be sent to your FastAPI
-            voice endpoint for transcription.
-          </Text>
+          {answer !== "" && (
+            <View style={styles.resultCard}>
+              <Text style={styles.resultLabel}>
+                MEAL PLANNER
+              </Text>
+              <Text style={styles.resultText}>
+                {answer}
+              </Text>
+            </View>
+          )}
+
+          {busy && (
+            <ActivityIndicator
+              color="#1686F5"
+              style={{ marginTop: 15 }}
+            />
+          )}
         </View>
-      )}
 
-      <View
-        style={[
-          styles.exampleCard,
-          {
-            backgroundColor: colors.primaryLight,
-            borderColor: colors.border,
-          },
-        ]}
-      >
-        <Text
-          style={[
-            styles.exampleTitle,
-            {
-              color: colors.primary,
-            },
-          ]}
-        >
-          Try saying
-        </Text>
+        <View style={styles.bottomControls}>
+          <Pressable
+            style={[
+              styles.controlButton,
+              isRecording && styles.recordingButton,
+              busy && styles.disabledButton,
+            ]}
+            onPress={handleMicPress}
+            disabled={busy}
+            accessibilityLabel="Start or stop voice recording"
+          >
+            {busy ? (
+              <ActivityIndicator color="#222222" />
+            ) : (
+              <Mic
+                size={25}
+                color={isRecording ? "#FFFFFF" : "#222222"}
+                strokeWidth={2.2}
+              />
+            )}
+          </Pressable>
 
-        <Text
-          style={[
-            styles.example,
-            {
-              color: colors.text,
-            },
-          ]}
-        >
-          “Make a healthy 7 day meal plan.”
-        </Text>
-
-        <Text
-          style={[
-            styles.example,
-            {
-              color: colors.text,
-            },
-          ]}
-        >
-          “What do I have in my pantry?”
-        </Text>
-
-        <Text
-          style={[
-            styles.example,
-            {
-              color: colors.text,
-            },
-          ]}
-        >
-          “What should I buy this week?”
-        </Text>
+          <Pressable
+            style={styles.controlButton}
+            onPress={() => void handleClose()}
+            accessibilityLabel="Close voice assistant"
+          >
+            <X
+              size={26}
+              color="#222222"
+              strokeWidth={2.2}
+            />
+          </Pressable>
+        </View>
       </View>
-    </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+  },
+
   container: {
     flex: 1,
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 24,
   },
 
-  content: {
-    padding: 20,
-    paddingBottom: 40,
-  },
-
-  title: {
-    marginTop: 20,
-    fontSize: 30,
-    fontWeight: "800",
-  },
-
-  subtitle: {
-    marginTop: 7,
-    marginBottom: 22,
-  },
-
-  voiceCard: {
-    borderRadius: 24,
-    padding: 25,
-    alignItems: "center",
-    borderWidth: 1,
-    elevation: 2,
-
-    shadowColor: "#000",
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.05,
-    shadowRadius: 6,
-  },
-
-  microphone: {
-    width: 110,
-    height: 110,
-    borderRadius: 55,
+  settingsButton: {
+    position: "absolute",
+    top: 18,
+    right: 24,
+    zIndex: 2,
+    width: 42,
+    height: 42,
     alignItems: "center",
     justifyContent: "center",
   },
 
-  microphoneText: {
-    fontSize: 45,
-  },
-
-  voiceTitle: {
-    fontSize: 22,
-    fontWeight: "800",
-    marginTop: 20,
-  },
-
-  voiceDescription: {
-    textAlign: "center",
-    marginTop: 7,
-  },
-
-  recordButton: {
-    width: "100%",
-    borderRadius: 15,
-    padding: 17,
+  centerContent: {
+    flex: 1,
     alignItems: "center",
-    marginTop: 24,
+    justifyContent: "center",
+    paddingTop: 36,
+    paddingBottom: 20,
   },
 
-  recordText: {
-    color: "#FFFFFF",
-    fontSize: 16,
-    fontWeight: "800",
+  orb: {
+    width: 188,
+    height: 188,
+    borderRadius: 94,
+    overflow: "hidden",
+    backgroundColor: "#DDF7FF",
+    shadowColor: "#1686F5",
+    shadowOpacity: 0.2,
+    shadowRadius: 25,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 4,
+  },
+
+  activeOrb: {
+    shadowOpacity: 0.4,
+    shadowRadius: 30,
+  },
+
+  orbBlue: {
+    position: "absolute",
+    bottom: -38,
+    left: -18,
+    width: 225,
+    height: 115,
+    borderRadius: 90,
+    backgroundColor: "#1686F5",
+    transform: [{ rotate: "-10deg" }],
+  },
+
+  orbHighlight: {
+    position: "absolute",
+    right: 10,
+    bottom: 12,
+    width: 85,
+    height: 50,
+    borderRadius: 40,
+    backgroundColor: "#A5E8FA",
+    opacity: 0.95,
+    transform: [{ rotate: "-25deg" }],
+  },
+
+  statusText: {
+    marginTop: 30,
+    color: "#747B84",
+    fontSize: 15,
+    textAlign: "center",
+    paddingHorizontal: 12,
   },
 
   resultCard: {
-    borderRadius: 18,
-    padding: 18,
-    marginTop: 15,
-    borderWidth: 1,
+    width: "100%",
+    maxHeight: 170,
+    marginTop: 16,
+    padding: 14,
+    borderRadius: 14,
+    backgroundColor: "#F5F7FA",
   },
 
-  resultTitle: {
-    fontSize: 17,
-    fontWeight: "800",
+  resultLabel: {
+    color: "#7A8491",
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 1,
+    marginBottom: 6,
   },
 
-  uri: {
-    fontSize: 12,
-    marginTop: 8,
-  },
-
-  note: {
-    fontSize: 13,
-    lineHeight: 19,
-    marginTop: 10,
-  },
-
-  exampleCard: {
-    borderRadius: 18,
-    padding: 18,
-    marginTop: 15,
-    borderWidth: 1,
-  },
-
-  exampleTitle: {
-    fontSize: 16,
-    fontWeight: "800",
-    marginBottom: 10,
-  },
-
-  example: {
+  resultText: {
+    color: "#20242A",
     fontSize: 14,
-    marginBottom: 7,
+    lineHeight: 21,
+  },
+
+  bottomControls: {
+    minHeight: 96,
+    paddingBottom: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+
+  controlButton: {
+    width: 68,
+    height: 68,
+    borderRadius: 22,
+    backgroundColor: "#F3F4F6",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  recordingButton: {
+    backgroundColor: "#1686F5",
+  },
+
+  disabledButton: {
+    opacity: 0.6,
   },
 });

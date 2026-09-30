@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useFonts, GreatVibes_400Regular } from "@expo-google-fonts/great-vibes";
 import {
   Alert,
@@ -9,18 +9,20 @@ import {
   Text,
   TextInput,
   View,
-  
 } from "react-native";
+
 
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import * as ImagePicker from "expo-image-picker";
 
 import {
-  SpeechToTextMode,
-  SpeechToTextPermissionStatus,
-  useSpeechToText,
-} from "react-native-expo-speech-to-text";
+  AudioModule,
+  RecordingPresets,
+  setAudioModeAsync,
+  useAudioRecorder,
+  useAudioRecorderState,
+} from "expo-audio";
 
 import {
   BarChart3,
@@ -38,9 +40,15 @@ import {
   UtensilsCrossed,
 } from "lucide-react-native";
 
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 
 import { useTheme } from "../context/ThemeContext";
+import {
+  getTodayMeals,
+  askMealPlanner,
+  transcribeAudio,
+  type DailyMeal,
+} from "../services/api";
 
 const HEALTH_QUOTES = [
   { text: "Good food. Good mood.", author: "Healthy Living" },
@@ -77,6 +85,29 @@ export default function HomeScreen() {
   });
 
   const [message, setMessage] = useState("");
+  const [assistantResponse, setAssistantResponse] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+
+  // Audio recording with metering enabled so we can detect silence.
+  const recorder = useAudioRecorder({
+    ...RecordingPresets.HIGH_QUALITY,
+    isMeteringEnabled: true,
+  });
+  const recorderState = useAudioRecorderState(recorder, 200);
+
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const isRecordingRef = React.useRef(false);
+  const micActionRef = React.useRef(false);
+  const speechDetectedRef = React.useRef(false);
+  const silenceTimerRef =
+    React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const maxRecordingTimerRef =
+    React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const [todayMeals, setTodayMeals] = useState<DailyMeal[]>([]);
+  const [mealsLoading, setMealsLoading] = useState(false);
+
   const [quote, setQuote] = useState(HEALTH_QUOTES[0]);
   const scrollY = React.useRef(new Animated.Value(0)).current;
 
@@ -112,78 +143,140 @@ export default function HomeScreen() {
 
     return () => clearTimeout(timeout);
   }, []);
-  const [speechLocale, setSpeechLocale] = useState("en-US");
+  const USER_ID = 1;
 
   // =========================================================
-  // SPEECH TO TEXT
+  // TODAY'S MEALS
   // =========================================================
 
-  const speech = useSpeechToText({
-    locale: speechLocale,
-    mode: SpeechToTextMode.Single,
-    enablePartialResults: true,
-    silenceTimeoutMs: 5000,
-    enableCleanup: false,
-  });
+  const loadTodayMeals = useCallback(async () => {
+    try {
+      setMealsLoading(true);
 
-  // Put live/final speech directly into the input box.
-  useEffect(() => {
-    if (speech.transcript) {
-      setMessage(speech.transcript);
+      const response = await getTodayMeals(USER_ID);
+
+      if (response.success) {
+        setTodayMeals(response.meals || []);
+      } else {
+        setTodayMeals([]);
+      }
+    } catch (error) {
+      console.log("Today's meals error:", error);
+      setTodayMeals([]);
+    } finally {
+      setMealsLoading(false);
     }
-  }, [speech.transcript]);
+  }, []);
 
-  // Detect speech locales available on this Android device.
+  // Reload whenever Home gets focus.
+  // This immediately picks up a meal plan generated on
+  // another screen and refreshes the current day's meals.
+  useFocusEffect(
+    useCallback(() => {
+      loadTodayMeals();
+    }, [loadTodayMeals])
+  );
+
+  // Refresh automatically at local midnight.
+  // This avoids making an API request every minute.
   useEffect(() => {
-    let mounted = true;
+    let midnightTimeout: ReturnType<typeof setTimeout>;
 
-    const loadSpeechLocales = async () => {
-      try {
-        const locales = await speech.getSupportedLocales();
-        console.log("Supported speech locales:", locales);
+    const scheduleMidnightRefresh = () => {
+      const now = new Date();
 
-        const normalizedLocales = locales.map((locale) =>
-          locale.toLowerCase()
-        );
+      // Calculate the next local midnight.
+      const nextMidnight = new Date(now);
+      nextMidnight.setHours(24, 0, 0, 0);
 
-        const preferredLocale = normalizedLocales.includes("en-in")
-          ? locales[normalizedLocales.indexOf("en-in")]
-          : normalizedLocales.includes("en-us")
-            ? locales[normalizedLocales.indexOf("en-us")]
-            : null;
+      // Small buffer so the date has definitely changed.
+      const delay = Math.max(
+        1000,
+        nextMidnight.getTime() - now.getTime() + 1000
+      );
 
-        if (mounted && preferredLocale) {
-          console.log("Selected speech locale:", preferredLocale);
-          setSpeechLocale(preferredLocale);
-        } else if (mounted) {
-          console.log(
-            "Neither en-IN nor en-US is reported as supported."
-          );
-        }
-      } catch (error) {
-        console.log(
-          "Could not load supported speech locales:",
-          error
-        );
-      }
-
-      try {
-        const capabilities = await speech.getCapabilities();
-        console.log("Speech capabilities:", capabilities);
-      } catch (error) {
-        console.log(
-          "Could not load speech capabilities:",
-          error
-        );
-      }
+      midnightTimeout = setTimeout(async () => {
+        await loadTodayMeals();
+        scheduleMidnightRefresh();
+      }, delay);
     };
 
-    loadSpeechLocales();
+    scheduleMidnightRefresh();
 
     return () => {
-      mounted = false;
+      clearTimeout(midnightTimeout);
     };
-  }, []);
+  }, [loadTodayMeals]);
+
+  const getMealColors = (mealType: string) => {
+    const type = mealType.toLowerCase();
+
+    if (type.includes("breakfast")) {
+      return {
+        backgroundColor: "#62B8E8",
+        borderColor: "#278FBE",
+        iconBackground: "#39A9E8",
+        iconColor: "#087FA6",
+      };
+    }
+
+    if (type.includes("lunch")) {
+      return {
+        backgroundColor: "#F3C04F",
+        borderColor: "#D39A18",
+        iconBackground: "#F6C344",
+        iconColor: "#B97900",
+      };
+    }
+
+    if (type.includes("dinner")) {
+      return {
+        backgroundColor: "#E86A6A",
+        borderColor: "#C83E3E",
+        iconBackground: "#E85B5B",
+        iconColor: "#B82F32",
+      };
+    }
+
+    return {
+      backgroundColor: "#8A7BE8",
+      borderColor: "#6253C9",
+      iconBackground: "#7767DD",
+      iconColor: "#4D3FB4",
+    };
+  };
+
+  const renderMealIcon = (mealType: string, color: string) => {
+    const type = mealType.toLowerCase();
+
+    if (type.includes("breakfast")) {
+      return (
+        <EggFried
+          size={25}
+          color={color}
+          strokeWidth={2}
+        />
+      );
+    }
+
+    if (type.includes("lunch")) {
+      return (
+        <Salad
+          size={25}
+          color={color}
+          strokeWidth={2}
+        />
+      );
+    }
+
+    return (
+      <UtensilsCrossed
+        size={25}
+        color={color}
+        strokeWidth={2}
+      />
+    );
+  };
 
   // =========================================================
   // IMAGE PICKER
@@ -221,135 +314,256 @@ export default function HomeScreen() {
   };
 
   // =========================================================
-  // MICROPHONE / SPEECH TO TEXT
+  // MICROPHONE / AUTOMATIC SILENCE DETECTION / TRANSCRIPTION
   // =========================================================
 
-  const handleMicPress = async () => {
+  const clearVoiceTimers = () => {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+
+    if (maxRecordingTimerRef.current) {
+      clearTimeout(maxRecordingTimerRef.current);
+      maxRecordingTimerRef.current = null;
+    }
+  };
+
+  const stopAndTranscribe = useCallback(async () => {
+    if (!isRecordingRef.current || micActionRef.current) {
+      return;
+    }
+
+    micActionRef.current = true;
+    clearVoiceTimers();
+
     try {
-      console.log("=================================");
-      console.log("MIC BUTTON PRESSED");
-      console.log("=================================");
+      console.log("Speech pause detected. Stopping recording...");
 
-      if (speech.stopping) {
-        console.log("Speech recognition is still stopping...");
-        return;
+      await recorder.stop();
+
+      isRecordingRef.current = false;
+      setIsRecording(false);
+
+      const audioUri = recorder.uri;
+      console.log("Saved audio URI:", audioUri);
+
+      await setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
+      });
+
+      if (!audioUri) {
+        throw new Error("No audio file was saved. Please try again.");
       }
 
-      // If recognition is already active, stop it.
-      if (speech.listening) {
-        console.log("Stopping speech recognition...");
-        await speech.stopListening();
-        return;
-      }
-
-      console.log("Speech available:", speech.available);
-      console.log("Speech ready:", speech.ready);
-      console.log(
-        "Speech permission:",
-        speech.permissionStatus
-      );
-      console.log(
-        "Speech capabilities:",
-        speech.capabilities
-      );
-      console.log("Speech last error:", speech.lastError);
-
-      // Check native speech recognition before starting.
-      if (!speech.available) {
-        Alert.alert(
-          "Speech Recognition Unavailable",
-          "Android does not currently have a usable speech recognition service. Make sure Google Speech Services is installed/enabled on the device, then try again."
-        );
-        return;
-      }
-
-      // Request permissions only after the user presses the mic.
-      const permission = await speech.requestPermissions();
-
-      console.log("Permission result:", permission);
+      const FileSystem = await import("expo-file-system/legacy");
+      const fileInfo = await FileSystem.getInfoAsync(audioUri);
 
       if (
-        permission !==
-        SpeechToTextPermissionStatus.Granted
+        !fileInfo.exists ||
+        !("size" in fileInfo) ||
+        fileInfo.size <= 0
       ) {
+        throw new Error("The audio recording is empty. Please try again.");
+      }
+
+      console.log("Audio file size:", fileInfo.size, "bytes");
+
+      setIsTranscribing(true);
+      console.log("Uploading audio for transcription...");
+
+      const transcript = (await transcribeAudio(audioUri)).trim();
+
+      if (!transcript) {
+        throw new Error("No speech was detected. Please try again.");
+      }
+
+      console.log("Transcription result:", transcript);
+      setMessage(transcript);
+
+      // Submit the recognized query automatically; the user does not
+      // need to press Send after speaking.
+      setChatLoading(true);
+      setAssistantResponse("");
+
+      const response = await askMealPlanner(transcript, USER_ID);
+      const answer =
+        response.response ||
+        response.message ||
+        "I couldn't generate an answer right now.";
+
+      setAssistantResponse(answer);
+      setMessage("");
+      console.log("Meal Planner voice query completed.");
+    } catch (error) {
+      console.error("Automatic voice query failed:", error);
+
+      Alert.alert(
+        "Voice Input Error",
+        error instanceof Error
+          ? error.message
+          : "Unable to record or process your voice query."
+      );
+    } finally {
+      clearVoiceTimers();
+      isRecordingRef.current = false;
+      micActionRef.current = false;
+      setIsRecording(false);
+      setIsTranscribing(false);
+      setChatLoading(false);
+
+      try {
+        await setAudioModeAsync({
+          allowsRecording: false,
+          playsInSilentMode: true,
+        });
+      } catch (audioModeError) {
+        console.warn("Could not restore audio mode:", audioModeError);
+      }
+    }
+  }, [recorder]);
+
+  // Watch the recorder's audio level. Once speech has been heard,
+  // 1.8 seconds of quiet automatically stops the recording.
+  useEffect(() => {
+    if (!isRecording || !isRecordingRef.current) {
+      return;
+    }
+
+    const level = recorderState.metering;
+
+    // Some devices may briefly return no metering value.
+    if (typeof level !== "number" || !Number.isFinite(level)) {
+      return;
+    }
+
+    // Decibels closer to zero are louder. This is a starting threshold;
+    // adjust it if very quiet speech or background noise causes problems.
+    const speechThresholdDb = -42;
+
+    if (level > speechThresholdDb) {
+      speechDetectedRef.current = true;
+
+      // The user has started speaking again, so cancel the stop timer.
+      if (silenceTimerRef.current) {
+        clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = null;
+      }
+
+      return;
+    }
+
+    // Do not stop before the user has spoken at least once.
+    if (!speechDetectedRef.current || silenceTimerRef.current) {
+      return;
+    }
+
+    silenceTimerRef.current = setTimeout(() => {
+      silenceTimerRef.current = null;
+      void stopAndTranscribe();
+    }, 1800);
+  }, [recorderState.metering, isRecording, stopAndTranscribe]);
+
+  // Safety timeout: stop after 30 seconds even if metering never reports
+  // silence, so the microphone cannot remain active indefinitely.
+  useEffect(() => {
+    if (!isRecording) {
+      return;
+    }
+
+    maxRecordingTimerRef.current = setTimeout(() => {
+      console.log("Maximum voice recording time reached.");
+      void stopAndTranscribe();
+    }, 30000);
+
+    return () => {
+      if (maxRecordingTimerRef.current) {
+        clearTimeout(maxRecordingTimerRef.current);
+        maxRecordingTimerRef.current = null;
+      }
+    };
+  }, [isRecording, stopAndTranscribe]);
+
+  // Clear timers if the screen unmounts.
+  useEffect(() => {
+    return () => {
+      if (silenceTimerRef.current) {
+        clearTimeout(silenceTimerRef.current);
+      }
+      if (maxRecordingTimerRef.current) {
+        clearTimeout(maxRecordingTimerRef.current);
+      }
+    };
+  }, []);
+
+  const handleMicPress = async () => {
+    if (micActionRef.current || isTranscribing || chatLoading) {
+      return;
+    }
+
+    // Keep a second tap as an optional manual-stop fallback. Normal use
+    // automatically stops when silence is detected.
+    if (isRecordingRef.current) {
+      void stopAndTranscribe();
+      return;
+    }
+
+    micActionRef.current = true;
+
+    try {
+      const permission =
+        await AudioModule.requestRecordingPermissionsAsync();
+
+      if (!permission.granted) {
         Alert.alert(
           "Microphone Permission Required",
-          "Please allow microphone and speech-recognition permissions in Android Settings."
+          "Please allow microphone access in Android Settings."
         );
         return;
       }
 
-      // Clear previous result.
-      speech.resetTranscript();
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+      });
+
+      clearVoiceTimers();
+      speechDetectedRef.current = false;
+
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+
+      isRecordingRef.current = true;
+      setIsRecording(true);
       setMessage("");
 
-      // Prepare on-device speech models.
-      if (!speech.ready) {
-        console.log(
-          "Speech engine is not ready. Preparing on-device models..."
-        );
+      console.log("Recording started. Speak your query.");
+      console.log("Recording will stop automatically after silence.");
 
-        try {
-          await speech.prepareOnDeviceModels();
-
-          console.log(
-            "On-device model preparation completed."
-          );
-          console.log(
-            "Ready after preparation:",
-            speech.ready
-          );
-        } catch (modelError) {
-          console.log(
-            "On-device model preparation error:",
-            modelError
-          );
-
-          console.log(
-            "Continuing with normal speech recognition attempt..."
-          );
-        }
-      }
-
-      console.log("Starting speech recognition...");
-
-      await speech.startListening();
-
-      console.log("Speech recognition started.");
-      console.log(
-        "Listening after start:",
-        speech.listening
-      );
-      console.log("Ready after start:", speech.ready);
-      console.log(
-        "Last error after start:",
-        speech.lastError
-      );
     } catch (error) {
-      console.log("=================================");
-      console.log("SPEECH TO TEXT ERROR");
-      console.log("=================================");
-      console.log("Error:", error);
-      console.log("Available:", speech.available);
-      console.log("Ready:", speech.ready);
-      console.log(
-        "Permission:",
-        speech.permissionStatus
-      );
-      console.log(
-        "Capabilities:",
-        speech.capabilities
-      );
-      console.log(
-        "Last error:",
-        speech.lastError
-      );
+      console.error("Could not start voice recording:", error);
+
+      isRecordingRef.current = false;
+      setIsRecording(false);
 
       Alert.alert(
-        "Speech Recognition Error",
-        speech.lastError?.message ||
-          "Unable to start voice input. Please make sure Google Speech Services is installed and enabled, then try again."
+        "Microphone Error",
+        error instanceof Error
+          ? error.message
+          : "Could not start recording."
       );
+
+      try {
+        await setAudioModeAsync({
+          allowsRecording: false,
+          playsInSilentMode: true,
+        });
+      } catch (audioModeError) {
+        console.warn("Could not restore audio mode:", audioModeError);
+      }
+    } finally {
+      micActionRef.current = false;
     }
   };
 
@@ -357,12 +571,42 @@ export default function HomeScreen() {
   // SEND MESSAGE
   // =========================================================
 
-  const sendMessage = () => {
-    if (!message.trim()) return;
+  const sendMessage = async () => {
+    const userMessage = message.trim();
 
-    console.log("User message:", message);
+    if (!userMessage || chatLoading) {
+      return;
+    }
 
-    // Backend connection will be added later.
+    try {
+      setChatLoading(true);
+      setAssistantResponse("");
+      setMessage("");
+
+      // Home "Ask Meal Planner" uses the lightweight /ask endpoint.
+      // This avoids the full orchestrator for simple questions.
+      const response = await askMealPlanner(
+        userMessage,
+        USER_ID
+      );
+
+      const answer =
+        response.response ||
+        response.message ||
+        "I couldn't generate an answer right now.";
+
+      setAssistantResponse(answer);
+    } catch (error: any) {
+      console.error("Quick Meal Planner error:", error);
+
+      Alert.alert(
+        "Meal Planner",
+        error?.message ||
+          "Unable to connect to the Meal Planner assistant."
+      );
+    } finally {
+      setChatLoading(false);
+    }
   };
 
   return (
@@ -591,6 +835,7 @@ export default function HomeScreen() {
                 },
               ]}
               returnKeyType="send"
+              blurOnSubmit={false}
               onSubmitEditing={sendMessage}
             />
 
@@ -599,13 +844,11 @@ export default function HomeScreen() {
             <Pressable
               style={[
                 styles.micButton,
-                speech.listening &&
-                  styles.recordingMicButton,
-                speech.stopping &&
-                  styles.disabledMicButton,
+                isRecording && styles.recordingMicButton,
+                (isTranscribing || chatLoading) && styles.disabledMicButton,
               ]}
               onPress={handleMicPress}
-              disabled={speech.stopping}
+              disabled={isTranscribing || chatLoading}
             >
               <Mic
                 size={24}
@@ -614,6 +857,80 @@ export default function HomeScreen() {
               />
             </Pressable>
           </View>
+
+          {/* ================= AI ANSWER ================= */}
+
+          {(chatLoading || assistantResponse) && (
+            <View
+              style={[
+                styles.answerCard,
+                {
+                  backgroundColor: colors.card,
+                  borderColor: colors.border,
+                },
+              ]}
+            >
+              <View style={styles.answerHeader}>
+                <View
+                  style={[
+                    styles.answerIcon,
+                    {
+                      backgroundColor:
+                        colors.primary + "20",
+                    },
+                  ]}
+                >
+                  <Utensils
+                    size={20}
+                    color={colors.primary}
+                  />
+                </View>
+
+                <View style={styles.answerHeaderText}>
+                  <Text
+                    style={[
+                      styles.answerTitle,
+                      { color: colors.text },
+                    ]}
+                  >
+                    Meal Planner
+                  </Text>
+
+                  <Text
+                    style={[
+                      styles.answerSubtitle,
+                      { color: colors.textSecondary },
+                    ]}
+                  >
+                    {chatLoading
+                      ? "Thinking..."
+                      : "AI answer"}
+                  </Text>
+                </View>
+              </View>
+
+              {chatLoading ? (
+                <Text
+                  style={[
+                    styles.answerText,
+                    { color: colors.textSecondary },
+                  ]}
+                >
+                  I'm checking your profile, pantry, and meal
+                  planner knowledge...
+                </Text>
+              ) : (
+                <Text
+                  style={[
+                    styles.answerText,
+                    { color: colors.text },
+                  ]}
+                >
+                  {assistantResponse}
+                </Text>
+              )}
+            </View>
+          )}
 
           {/* ================= TODAY'S MEALS ================= */}
 
@@ -643,9 +960,7 @@ export default function HomeScreen() {
                 <Text
                   style={[
                     styles.todayMealTitle,
-                    {
-                      color: colors.text,
-                    },
+                    { color: colors.text },
                   ]}
                 >
                   Today's Meal
@@ -654,12 +969,14 @@ export default function HomeScreen() {
                 <Text
                   style={[
                     styles.todayMealSubtitle,
-                    {
-                      color: colors.textSecondary,
-                    },
+                    { color: colors.textSecondary },
                   ]}
                 >
-                  Your meals for today
+                  {mealsLoading
+                    ? "Loading today's meals..."
+                    : todayMeals.length > 0
+                      ? `${todayMeals.length} meals planned for today`
+                      : "Generate a meal plan to see today's meals"}
                 </Text>
               </View>
 
@@ -670,170 +987,105 @@ export default function HomeScreen() {
               />
             </View>
 
-            {/* BREAKFAST */}
-            <View
-              style={[
-                styles.mealRow,
-                {
-                  backgroundColor: "#62B8E8",
-                  borderColor: "#278FBE",
-                },
-              ]}
-            >
-              <View
-                style={[
-                  styles.mealIconBox,
-                  {
-                    backgroundColor: "#39A9E8",
-                    borderColor: "#1789C7",
-                    borderWidth: 1,
-                  },
-                ]}
-              >
-                <View style={styles.mealIconPlate}>
-                  <EggFried
-                    size={25}
-                    color="#087FA6"
-                    strokeWidth={2}
-                  />
-                </View>
-              </View>
-
-              <View style={styles.mealInfo}>
+            {mealsLoading ? (
+              <View style={styles.mealsLoadingContainer}>
                 <Text
                   style={[
-                    styles.mealType,
-                    {
-                      color: colors.textSecondary,
-                    },
+                    styles.mealsLoadingText,
+                    { color: colors.textSecondary },
                   ]}
                 >
-                  Breakfast
-                </Text>
-
-                <Text
-                  style={[
-                    styles.mealName,
-                    {
-                      color: colors.text,
-                    },
-                  ]}
-                  numberOfLines={1}
-                >
-                  Oatmeal with Banana
+                  Loading meals...
                 </Text>
               </View>
-            </View>
+            ) : todayMeals.length > 0 ? (
+              todayMeals.map((meal) => {
+                const mealColors = getMealColors(
+                  meal.meal_type
+                );
 
-            {/* LUNCH */}
-            <View
-              style={[
-                styles.mealRow,
-                {
-                  backgroundColor: "#F3C04F",
-                  borderColor: "#D39A18",
-                },
-              ]}
-            >
-              <View
-                style={[
-                  styles.mealIconBox,
-                  {
-                    backgroundColor: "#F6C344",
-                    borderColor: "#D59B16",
-                    borderWidth: 1,
-                  },
-                ]}
-              >
-                <View style={styles.mealIconPlate}>
-                  <Salad
-                    size={25}
-                    color="#B97900"
-                    strokeWidth={2}
-                  />
-                </View>
-              </View>
+                return (
+                  <View
+                    key={meal.id}
+                    style={[
+                      styles.mealRow,
+                      {
+                        backgroundColor:
+                          mealColors.backgroundColor,
+                        borderColor:
+                          mealColors.borderColor,
+                      },
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.mealIconBox,
+                        {
+                          backgroundColor:
+                            mealColors.iconBackground,
+                          borderColor:
+                            mealColors.borderColor,
+                          borderWidth: 1,
+                        },
+                      ]}
+                    >
+                      <View style={styles.mealIconPlate}>
+                        {renderMealIcon(
+                          meal.meal_type,
+                          mealColors.iconColor
+                        )}
+                      </View>
+                    </View>
 
-              <View style={styles.mealInfo}>
+                    <View style={styles.mealInfo}>
+                      <Text
+                        style={[
+                          styles.mealType,
+                          { color: colors.textSecondary },
+                        ]}
+                      >
+                        {meal.meal_type}
+                      </Text>
+
+                      <Text
+                        style={[
+                          styles.mealName,
+                          { color: colors.text },
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {meal.meal_name}
+                      </Text>
+                    </View>
+                  </View>
+                );
+              })
+            ) : (
+              <View style={styles.noMealsContainer}>
                 <Text
                   style={[
-                    styles.mealType,
-                    {
-                      color: colors.textSecondary,
-                    },
+                    styles.noMealsText,
+                    { color: colors.textSecondary },
                   ]}
                 >
-                  Lunch
+                  No meals are saved for today yet.
                 </Text>
 
-                <Text
+                <Pressable
                   style={[
-                    styles.mealName,
+                    styles.noMealsButton,
                     {
-                      color: colors.text,
+                      backgroundColor: colors.primary,
                     },
                   ]}
-                  numberOfLines={1}
+                  onPress={() => router.push("/meal-plan")}
                 >
-                  Paneer Rice Bowl
-                </Text>
+                  <Text style={styles.noMealsButtonText}>
+                    Create Meal Plan
+                  </Text>
+                </Pressable>
               </View>
-            </View>
-
-            {/* DINNER */}
-            <View
-              style={[
-                styles.mealRow,
-                {
-                  backgroundColor: "#E86A6A",
-                  borderColor: "#C83E3E",
-                },
-              ]}
-            >
-              <View
-                style={[
-                  styles.mealIconBox,
-                  {
-                    backgroundColor: "#E85B5B",
-                    borderColor: "#C83D3D",
-                    borderWidth: 1,
-                  },
-                ]}
-              >
-                <View style={styles.mealIconPlate}>
-                  <UtensilsCrossed
-                    size={25}
-                    color="#B82F32"
-                    strokeWidth={2}
-                  />
-                </View>
-              </View>
-
-              <View style={styles.mealInfo}>
-                <Text
-                  style={[
-                    styles.mealType,
-                    {
-                      color: colors.textSecondary,
-                    },
-                  ]}
-                >
-                  Dinner
-                </Text>
-
-                <Text
-                  style={[
-                    styles.mealName,
-                    {
-                      color: colors.text,
-                    },
-                  ]}
-                  numberOfLines={1}
-                >
-                  Vegetable Roti
-                </Text>
-              </View>
-            </View>
+            )}
           </Pressable>
 
           {/* ================= QUICK ACTIONS ================= */}
@@ -1169,18 +1421,14 @@ export default function HomeScreen() {
             </Text>
           </Pressable>
 
-          {/* CENTER MIC */}
+          {/* CENTER MIC: opens the dedicated voice assistant screen.
+              The upper Ask Meal Planner microphone keeps its existing behavior. */}
 
           <Pressable
-            style={[
-              styles.centerMicButton,
-              speech.listening &&
-                styles.recordingCenterMicButton,
-              speech.stopping &&
-                styles.disabledCenterMicButton,
-            ]}
-            onPress={handleMicPress}
-            disabled={speech.stopping}
+            style={styles.centerMicButton}
+            onPress={() => router.push("/voice")}
+            accessibilityRole="button"
+            accessibilityLabel="Open voice assistant"
           >
             <Mic
               size={29}
@@ -1536,6 +1784,84 @@ const styles = StyleSheet.create({
   recentTime: {
     fontSize: 13,
     marginTop: 3,
+  },
+
+  /* ================= AI ANSWER ================= */
+
+  answerCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    padding: 16,
+    marginTop: 12,
+    marginBottom: 8,
+  },
+
+  answerHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+
+  answerIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 13,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  answerHeaderText: {
+    marginLeft: 11,
+    flex: 1,
+  },
+
+  answerTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+  },
+
+  answerSubtitle: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+
+  answerText: {
+    fontSize: 15,
+    lineHeight: 23,
+  },
+
+  /* ================= TODAY'S MEALS ================= */
+
+  mealsLoadingContainer: {
+    paddingVertical: 18,
+    alignItems: "center",
+  },
+
+  mealsLoadingText: {
+    fontSize: 14,
+  },
+
+  noMealsContainer: {
+    paddingVertical: 10,
+    alignItems: "center",
+  },
+
+  noMealsText: {
+    fontSize: 14,
+    textAlign: "center",
+    marginBottom: 12,
+  },
+
+  noMealsButton: {
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 12,
+  },
+
+  noMealsButtonText: {
+    color: "#FFFFFF",
+    fontSize: 13,
+    fontWeight: "700",
   },
 
   todayMealCard: {
