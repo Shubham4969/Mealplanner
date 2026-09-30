@@ -4,6 +4,7 @@ from DataBase.profile_table import UserProfile
 
 from DataBase.pantry_table import Pantryitem
 from DataBase.conversation_table import Conversation, ConversationHistory
+from DataBase.grocery_table import Groceryitem
 
 load_dotenv()
 

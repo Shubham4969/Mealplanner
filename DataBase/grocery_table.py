@@ -1,10 +1,10 @@
-from sqlalchemy import Column, Integer, String
+from sqlalchemy import Column, Integer, String, Boolean, Float
 
 from DataBase.connection import Base
 
 
-class Pantryitem(Base):
-    __tablename__ = "pantry"
+class Groceryitem(Base):
+    __tablename__ = "grocery_items"
 
     id = Column(
         Integer,
@@ -24,12 +24,19 @@ class Pantryitem(Base):
     )
 
     quantity = Column(
-        Integer,
-        nullable=False
+        Float,
+        nullable=False,
+        default=1
     )
 
     unit = Column(
         String,
         nullable=False,
-        default="kg"
+        default="pcs"
+    )
+
+    purchased = Column(
+        Boolean,
+        nullable=False,
+        default=False
     )
