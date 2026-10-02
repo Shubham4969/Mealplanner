@@ -3,37 +3,52 @@ import os
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
-from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 load_dotenv()
 
-database_url = os.getenv("DATABASE_URL")
+# Prefer the hosted database URL configured in Render.
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-if database_url:
-    db_url = make_url(database_url)
+# Preserve compatibility with your existing local .env configuration.
+if not DATABASE_URL:
+    DB_USER = os.getenv("DB_USER")
+    DB_PASSWORD = os.getenv("DB_PASSWORD")
+    DB_HOST = os.getenv("DB_HOST")
+    DB_PORT = os.getenv("DB_PORT", "5432")
+    DB_NAME = os.getenv("DB_NAME")
 
-    if db_url.drivername in ("postgres", "postgresql"):
-        db_url = db_url.set(
-            drivername="postgresql+psycopg2"
+    if not all([DB_USER, DB_PASSWORD, DB_HOST, DB_NAME]):
+        raise RuntimeError(
+            "Set DATABASE_URL or all required DB_* variables."
         )
-else:
-    db_url = URL.create(
-        drivername="postgresql+psycopg2",
-        username=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-        host=os.getenv("DB_HOST"),
-        port=int(os.getenv("DB_PORT", "5432")),
-        database=os.getenv("DB_NAME"),
+
+    from sqlalchemy.engine import URL
+
+    DATABASE_URL = URL.create(
+        "postgresql+psycopg2",
+        username=DB_USER,
+        password=DB_PASSWORD,
+        host=DB_HOST,
+        port=int(DB_PORT),
+        database=DB_NAME,
     )
 
+# SQLAlchemy uses psycopg2 for PostgreSQL connections.
+if isinstance(DATABASE_URL, str):
+    if DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = DATABASE_URL.replace(
+            "postgres://", "postgresql+psycopg2://", 1
+        )
+    elif DATABASE_URL.startswith("postgresql://"):
+        DATABASE_URL = DATABASE_URL.replace(
+            "postgresql://", "postgresql+psycopg2://", 1
+        )
+
 engine = create_engine(
-    db_url,
+    DATABASE_URL,
     echo=False,
     pool_pre_ping=True,
-    pool_size=3,
-    max_overflow=2,
-    pool_recycle=1800,
 )
 
 SessionLocal = sessionmaker(
