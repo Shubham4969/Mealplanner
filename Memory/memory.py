@@ -4,7 +4,27 @@ import os
 
 load_dotenv()
 
+from urllib.parse import urlparse
+
+QDRANT_URL = os.getenv("QDRANT_URL")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
+
+parsed_qdrant_url = urlparse(QDRANT_URL or "")
+
+print("========== MEAL PLANNER QDRANT DEBUG ==========")
+print("QDRANT_URL configured:", bool(QDRANT_URL))
+print("QDRANT_HOST:", parsed_qdrant_url.hostname)
+print("QDRANT_SCHEME:", parsed_qdrant_url.scheme)
+print("QDRANT_PORT:", parsed_qdrant_url.port)
+print("QDRANT_API_KEY configured:", bool(QDRANT_API_KEY))
+print("MEMORY_QDRANT_COLLECTION:", os.getenv("MEMORY_QDRANT_COLLECTION"))
+print("================================================")
+
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+MEMORY_QDRANT_COLLECTION = os.getenv(
+    "MEMORY_QDRANT_COLLECTION",
+    "Meal_planner_memory"
+)
 
 
 config = {
@@ -29,8 +49,10 @@ config = {
     "vector_store": {
         "provider": "qdrant",
         "config": {
-            "host": "localhost",
-            "port": 6333
+            "collection_name": MEMORY_QDRANT_COLLECTION,
+            "embedding_model_dims": 1536,
+            "url": QDRANT_URL,
+            "api_key": QDRANT_API_KEY
         }
     }
 }
