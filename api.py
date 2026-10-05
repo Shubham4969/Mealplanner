@@ -1,32 +1,33 @@
 import json
 import re
-from datetime import date, timedelta
 import httpx
 import os
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
-
-from Agents.meal_agent import meal_agent
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from openai import AsyncOpenAI
-
-from fastapi import UploadFile, File, HTTPException
-from openai import AsyncOpenAI
-
-from fastapi import UploadFile, File, HTTPException
-from openai import AsyncOpenAI
-
-transcription_client = AsyncOpenAI()
-
 from pydantic import BaseModel
-from sqlalchemy import Column, Integer, String, Date, DateTime, UniqueConstraint
+
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    Date,
+    DateTime,
+    UniqueConstraint,
+)
 
 from agents import Agent, Runner, SQLiteSession
 
+from Agents.meal_agent import meal_agent
 from Orchestrator import orchestrator_agent
+
+# ============================================================
+# DATABASE
+# ============================================================
 
 from DataBase.connection import (
     SessionLocal,
@@ -34,14 +35,20 @@ from DataBase.connection import (
     engine,
 )
 
+from DataBase.profile_table import UserProfile
 from DataBase.meal_plan_table import MealPlan
 from DataBase.daily_meal_table import DailyMeal
+from DataBase.pantry_table import Pantryitem
+from DataBase.grocery_table import GroceryItem
 
 from DataBase.conversation_table import (
     Conversation,
     ConversationHistory,
 )
 
+# ============================================================
+# DATABASE CRUD
+# ============================================================
 
 from DataBase.meal_plan_crud import (
     save_meal_plan,
@@ -66,20 +73,43 @@ from DataBase.grocery_crud import (
     clear_grocery_items,
 )
 
+# ============================================================
+# OPENAI
+# ============================================================
+
+OPENAI_API_KEY = (
+    os.getenv("OPENAI_API_KEY") or ""
+).strip()
+
+if not OPENAI_API_KEY:
+    raise RuntimeError(
+        "OPENAI_API_KEY is not configured."
+    )
+
+transcription_client = AsyncOpenAI(
+    api_key=OPENAI_API_KEY
+)
+
+# ============================================================
+# REQUEST MODELS
+# ============================================================
+
 class PantryCreateRequest(BaseModel):
     item: str
     quantity: int
     unit: str
 
+
 class MealPlanRequest(BaseModel):
     user_id: int = 1
-    days: int = 1    
+    days: int = 1
 
 
 class PantryUpdateRequest(BaseModel):
     item: Optional[str] = None
     quantity: Optional[int] = None
     unit: Optional[str] = None
+
 
 class GroceryCreateRequest(BaseModel):
     item: str
@@ -99,15 +129,46 @@ class MealConsumptionRequest(BaseModel):
     user_id: int = 1
 
 
+# ============================================================
+# MEAL CONSUMPTION TABLE
+# ============================================================
+
 class MealConsumption(Base):
     __tablename__ = "meal_consumptions"
 
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, nullable=False, index=True)
-    daily_meal_id = Column(Integer, nullable=False, index=True)
-    meal_date = Column(Date, nullable=False)
-    meal_name = Column(String, nullable=False)
-    consumed_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+
+    user_id = Column(
+        Integer,
+        nullable=False,
+        index=True,
+    )
+
+    daily_meal_id = Column(
+        Integer,
+        nullable=False,
+        index=True,
+    )
+
+    meal_date = Column(
+        Date,
+        nullable=False,
+    )
+
+    meal_name = Column(
+        String,
+        nullable=False,
+    )
+
+    consumed_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+    )
 
     __table_args__ = (
         UniqueConstraint(
@@ -118,14 +179,26 @@ class MealConsumption(Base):
     )
 
 
-# Create all known database tables, including meal_consumptions.
+# ============================================================
+# CREATE ALL DATABASE TABLES
+# ============================================================
+
 Base.metadata.create_all(bind=engine)
 
-# Startup diagnostics: confirm which API module and database are active.
-print(f"[Meal Planner API] Loaded module: {__file__}")
+
+# ============================================================
+# STARTUP DIAGNOSTICS
+# ============================================================
+
+print(
+    f"[Meal Planner API] Loaded module: {__file__}"
+)
+
 print(
     "[Meal Planner API] Database: "
-    + engine.url.render_as_string(hide_password=True)
+    + engine.url.render_as_string(
+        hide_password=True
+    )
 )
 
 
