@@ -46,6 +46,8 @@ from DataBase.conversation_table import (
     ConversationHistory,
 )
 
+Base.metadata.create_all(bind=engine)
+
 # ============================================================
 # DATABASE CRUD
 # ============================================================
