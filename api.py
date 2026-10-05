@@ -1,7 +1,7 @@
 import json
 import re
 from datetime import date, timedelta
-
+import httpx
 import os
 
 from datetime import datetime
@@ -2926,60 +2926,27 @@ async def generate_grocery_list(
     finally:
         db_session.close()
 
-@app.post("/transcribe")
-async def transcribe_audio(audio: UploadFile = File(...)):
-    try:
-        audio_bytes = await audio.read()
+# ============================================================
+# AUDIO TRANSCRIPTION
+# ============================================================
 
-        if not audio_bytes:
-            raise HTTPException(
-                status_code=400,
-                detail="No audio was received."
-            )
-
-        result = await transcription_client.audio.transcriptions.create(
-            model="gpt-4o-mini-transcribe",
-            file=(
-                audio.filename or "recording.m4a",
-                audio_bytes,
-                audio.content_type or "audio/mp4",
-            ),
-        )
-
-        return {
-            "success": True,
-            "text": result.text,
-        }
-
-    except HTTPException:
-        raise
-
-    except Exception as exc:
-        print("========== TRANSCRIPTION DEBUG ==========")
-        print("Transcription error type:", type(exc).__name__)
-        print("Transcription error:", repr(exc))
-        print("OPENAI_API_KEY configured:", bool(os.getenv("OPENAI_API_KEY")))
-        print("=========================================")
-
-        raise HTTPException(
-            status_code=502,
-            detail="Audio transcription failed. Check the backend logs."
-        )
-
-
-from fastapi import UploadFile, File, HTTPException
-from openai import AsyncOpenAI
-
-# Reuse your existing OpenAI client if you already have one.
 transcription_client = AsyncOpenAI()
 
 
 @app.post("/transcribe")
 async def transcribe_audio(audio: UploadFile = File(...)):
+    """
+    Receive an audio recording from the mobile app,
+    verify Render can reach OpenAI, and transcribe the audio.
+    """
+
     try:
+        # --------------------------------------------------------
+        # 1. Read uploaded audio
+        # --------------------------------------------------------
+
         audio_bytes = await audio.read()
 
-        # Check what Android actually sent.
         print("\n========== AUDIO TRANSCRIPTION ==========")
         print("Filename:", audio.filename)
         print("Content type:", audio.content_type)
@@ -2991,29 +2958,137 @@ async def transcribe_audio(audio: UploadFile = File(...)):
                 detail="The backend received an empty audio file."
             )
 
-        result = await transcription_client.audio.transcriptions.create(
-            model="gpt-4o-mini-transcribe",
-            file=(
-                audio.filename or "recording.m4a",
-                audio_bytes,
-                audio.content_type or "audio/mp4",
-            ),
-        )
+        # --------------------------------------------------------
+        # 2. Verify OPENAI_API_KEY exists
+        # --------------------------------------------------------
+
+        openai_api_key = os.getenv("OPENAI_API_KEY")
+
+        print("OPENAI_API_KEY configured:", bool(openai_api_key))
+
+        if not openai_api_key:
+            raise HTTPException(
+                status_code=500,
+                detail="OPENAI_API_KEY is not configured on the backend."
+            )
+
+        # --------------------------------------------------------
+        # 3. Test Render -> OpenAI connectivity
+        # --------------------------------------------------------
+
+        print("\n========== OPENAI CONNECTIVITY TEST ==========")
+
+        try:
+            async with httpx.AsyncClient() as client:
+                test_response = await client.get(
+                    "https://api.openai.com/v1/models",
+                    headers={
+                        "Authorization": f"Bearer {openai_api_key}"
+                    },
+                    timeout=20.0,
+                )
+
+            print(
+                "OpenAI HTTP status:",
+                test_response.status_code
+            )
+
+            print(
+                "OpenAI response:",
+                test_response.text[:300]
+            )
+
+            print("===============================================\n")
+
+        except Exception as connection_error:
+            print(
+                "OpenAI connectivity test failed:",
+                type(connection_error).__name__
+            )
+
+            print(
+                "OpenAI connectivity error:",
+                repr(connection_error)
+            )
+
+            print("===============================================\n")
+
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "The Render server cannot connect to "
+                    "the OpenAI API."
+                )
+            )
+
+        # --------------------------------------------------------
+        # 4. Send audio to OpenAI transcription API
+        # --------------------------------------------------------
+
+        print("========== OPENAI TRANSCRIPTION ==========")
+
+        try:
+            result = await transcription_client.audio.transcriptions.create(
+                model="gpt-4o-mini-transcribe",
+                file=(
+                    audio.filename or "recording.m4a",
+                    audio_bytes,
+                    audio.content_type or "audio/mp4",
+                ),
+            )
+
+        except Exception as transcription_error:
+
+            print(
+                "Transcription error type:",
+                type(transcription_error).__name__
+            )
+
+            print(
+                "Transcription error:",
+                repr(transcription_error)
+            )
+
+            print(
+                "OPENAI_API_KEY configured:",
+                bool(openai_api_key)
+            )
+
+            print("==========================================\n")
+
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "OpenAI transcription request failed. "
+                    "Check Render logs."
+                )
+            )
+
+        # --------------------------------------------------------
+        # 5. Extract transcript
+        # --------------------------------------------------------
 
         transcript = (result.text or "").strip()
 
-        print("Transcription result:", repr(transcript))
-        print("=========================================\n")
+        print(
+            "Transcription result:",
+            repr(transcript)
+        )
+
+        print("==========================================\n")
 
         if not transcript:
             raise HTTPException(
                 status_code=422,
                 detail=(
-                    "The audio reached the transcription service, "
-                    "but no speech was recognized. Check the recording "
-                    "and backend logs."
-                ),
+                    "The audio reached OpenAI, "
+                    "but no speech was recognized."
+                )
             )
+
+        # --------------------------------------------------------
+        # 6. Return transcript to mobile app
+        # --------------------------------------------------------
 
         return {
             "success": True,
@@ -3024,12 +3099,30 @@ async def transcribe_audio(audio: UploadFile = File(...)):
         raise
 
     except Exception as exc:
-        print("Transcription exception:", repr(exc))
+
+        print("========== TRANSCRIPTION DEBUG ==========")
+
+        print(
+            "Unexpected transcription error type:",
+            type(exc).__name__
+        )
+
+        print(
+            "Unexpected transcription error:",
+            repr(exc)
+        )
+
+        print(
+            "OPENAI_API_KEY configured:",
+            bool(os.getenv("OPENAI_API_KEY"))
+        )
+
+        print("=========================================\n")
 
         raise HTTPException(
             status_code=502,
-            detail="Audio transcription failed. Check the backend terminal."
-        )   
+            detail="Audio transcription failed. Check Render logs."
+        )  
 
 import base64
 
