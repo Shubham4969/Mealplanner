@@ -39,7 +39,7 @@ from DataBase.profile_table import UserProfile
 from DataBase.meal_plan_table import MealPlan
 from DataBase.daily_meal_table import DailyMeal
 from DataBase.pantry_table import Pantryitem
-from DataBase.grocery_table import GroceryItem
+from DataBase.grocery_table import Groceryitem
 
 from DataBase.conversation_table import (
     Conversation,
