@@ -2,6 +2,8 @@ import json
 import re
 from datetime import date, timedelta
 
+import os
+
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -2953,10 +2955,15 @@ async def transcribe_audio(audio: UploadFile = File(...)):
         raise
 
     except Exception as exc:
-        print(f"Audio transcription error: {exc}")
+        print("========== TRANSCRIPTION DEBUG ==========")
+        print("Transcription error type:", type(exc).__name__)
+        print("Transcription error:", repr(exc))
+        print("OPENAI_API_KEY configured:", bool(os.getenv("OPENAI_API_KEY")))
+        print("=========================================")
+
         raise HTTPException(
             status_code=502,
-            detail="Audio transcription failed. Please try again."
+            detail="Audio transcription failed. Check the backend logs."
         )
 
 
