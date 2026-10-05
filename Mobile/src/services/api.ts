@@ -1,4 +1,4 @@
-export const API_BASE_URL = "http://192.168.1.8:8000";
+export const API_BASE_URL = "https://mealplanner-6ec7.onrender.com";
 
 // ============================================================
 // TYPES
