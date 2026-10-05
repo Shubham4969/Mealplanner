@@ -58,7 +58,9 @@ config = {
 }
 
 
+print("[Meal Planner] Creating Mem0 client...")
 mem_client = Memory.from_config(config)
+print("[Meal Planner] Mem0 client created successfully!")
 
 
 def search_memory(user_id, query):
