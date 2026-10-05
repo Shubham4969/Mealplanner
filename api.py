@@ -37,6 +37,12 @@ from DataBase.connection import (
 from DataBase.meal_plan_table import MealPlan
 from DataBase.daily_meal_table import DailyMeal
 
+from DataBase.conversation_table import (
+    Conversation,
+    ConversationHistory,
+)
+
+
 from DataBase.meal_plan_crud import (
     save_meal_plan,
     get_latest_meal_plan,
