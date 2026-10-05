@@ -28,8 +28,6 @@ from agents import Agent, Runner, SQLiteSession
 
 from Orchestrator import orchestrator_agent
 
-transcription_client = AsyncOpenAI()
-
 from DataBase.connection import (
     SessionLocal,
     Base,
@@ -2930,21 +2928,17 @@ async def generate_grocery_list(
 # AUDIO TRANSCRIPTION
 # ============================================================
 
-transcription_client = AsyncOpenAI()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+
+transcription_client = AsyncOpenAI(
+    api_key=OPENAI_API_KEY
+)
 
 
 @app.post("/transcribe")
 async def transcribe_audio(audio: UploadFile = File(...)):
-    """
-    Receive an audio recording from the mobile app,
-    verify Render can reach OpenAI, and transcribe the audio.
-    """
 
     try:
-        # --------------------------------------------------------
-        # 1. Read uploaded audio
-        # --------------------------------------------------------
-
         audio_bytes = await audio.read()
 
         print("\n========== AUDIO TRANSCRIPTION ==========")
@@ -2958,49 +2952,62 @@ async def transcribe_audio(audio: UploadFile = File(...)):
                 detail="The backend received an empty audio file."
             )
 
-        # --------------------------------------------------------
-        # 2. Verify OPENAI_API_KEY exists
-        # --------------------------------------------------------
+        # ========================================================
+        # OPENAI API KEY
+        # ========================================================
 
-        openai_api_key = os.getenv("OPENAI_API_KEY")
+        openai_api_key = os.getenv(
+            "OPENAI_API_KEY",
+            ""
+        ).strip()
 
-        print("OPENAI_API_KEY configured:", bool(openai_api_key))
+        print(
+            "OPENAI_API_KEY configured:",
+            bool(openai_api_key)
+        )
 
         if not openai_api_key:
             raise HTTPException(
                 status_code=500,
-                detail="OPENAI_API_KEY is not configured on the backend."
+                detail="OPENAI_API_KEY is not configured."
             )
 
-        # --------------------------------------------------------
-        # 3. Test Render -> OpenAI connectivity
-        # --------------------------------------------------------
+        # ========================================================
+        # OPENAI CONNECTIVITY TEST
+        # ========================================================
 
-        print("\n========== OPENAI CONNECTIVITY TEST ==========")
+        print(
+            "\n========== OPENAI CONNECTIVITY TEST =========="
+        )
 
         try:
             async with httpx.AsyncClient() as client:
-                test_response = await client.get(
+
+                response = await client.get(
                     "https://api.openai.com/v1/models",
                     headers={
-                        "Authorization": f"Bearer {openai_api_key}"
+                        "Authorization":
+                            f"Bearer {openai_api_key}"
                     },
                     timeout=20.0,
                 )
 
             print(
                 "OpenAI HTTP status:",
-                test_response.status_code
+                response.status_code
             )
 
             print(
                 "OpenAI response:",
-                test_response.text[:300]
+                response.text[:300]
             )
 
-            print("===============================================\n")
+            print(
+                "===============================================\n"
+            )
 
         except Exception as connection_error:
+
             print(
                 "OpenAI connectivity test failed:",
                 type(connection_error).__name__
@@ -3011,23 +3018,28 @@ async def transcribe_audio(audio: UploadFile = File(...)):
                 repr(connection_error)
             )
 
-            print("===============================================\n")
+            print(
+                "===============================================\n"
+            )
 
             raise HTTPException(
                 status_code=502,
                 detail=(
-                    "The Render server cannot connect to "
-                    "the OpenAI API."
+                    "The Render server cannot connect "
+                    "to the OpenAI API."
                 )
             )
 
-        # --------------------------------------------------------
-        # 4. Send audio to OpenAI transcription API
-        # --------------------------------------------------------
+        # ========================================================
+        # TRANSCRIPTION
+        # ========================================================
 
-        print("========== OPENAI TRANSCRIPTION ==========")
+        print(
+            "========== OPENAI TRANSCRIPTION =========="
+        )
 
         try:
+
             result = await transcription_client.audio.transcriptions.create(
                 model="gpt-4o-mini-transcribe",
                 file=(
@@ -3050,11 +3062,8 @@ async def transcribe_audio(audio: UploadFile = File(...)):
             )
 
             print(
-                "OPENAI_API_KEY configured:",
-                bool(openai_api_key)
+                "==========================================\n"
             )
-
-            print("==========================================\n")
 
             raise HTTPException(
                 status_code=502,
@@ -3064,18 +3073,18 @@ async def transcribe_audio(audio: UploadFile = File(...)):
                 )
             )
 
-        # --------------------------------------------------------
-        # 5. Extract transcript
-        # --------------------------------------------------------
-
-        transcript = (result.text or "").strip()
+        transcript = (
+            result.text or ""
+        ).strip()
 
         print(
             "Transcription result:",
             repr(transcript)
         )
 
-        print("==========================================\n")
+        print(
+            "==========================================\n"
+        )
 
         if not transcript:
             raise HTTPException(
@@ -3086,13 +3095,9 @@ async def transcribe_audio(audio: UploadFile = File(...)):
                 )
             )
 
-        # --------------------------------------------------------
-        # 6. Return transcript to mobile app
-        # --------------------------------------------------------
-
         return {
             "success": True,
-            "text": transcript,
+            "text": transcript
         }
 
     except HTTPException:
@@ -3100,29 +3105,28 @@ async def transcribe_audio(audio: UploadFile = File(...)):
 
     except Exception as exc:
 
-        print("========== TRANSCRIPTION DEBUG ==========")
+        print(
+            "========== TRANSCRIPTION DEBUG =========="
+        )
 
         print(
-            "Unexpected transcription error type:",
+            "Unexpected error type:",
             type(exc).__name__
         )
 
         print(
-            "Unexpected transcription error:",
+            "Unexpected error:",
             repr(exc)
         )
 
         print(
-            "OPENAI_API_KEY configured:",
-            bool(os.getenv("OPENAI_API_KEY"))
+            "=========================================\n"
         )
-
-        print("=========================================\n")
 
         raise HTTPException(
             status_code=502,
-            detail="Audio transcription failed. Check Render logs."
-        )  
+            detail="Audio transcription failed."
+        ) 
 
 import base64
 
