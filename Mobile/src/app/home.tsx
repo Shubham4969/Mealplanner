@@ -45,6 +45,7 @@ import { router, useFocusEffect } from "expo-router";
 import { useTheme } from "../context/ThemeContext";
 import {
   getTodayMeals,
+  getGroceryList,
   askMealPlanner,
   transcribeAudio,
   type DailyMeal,
@@ -107,6 +108,7 @@ export default function HomeScreen() {
 
   const [todayMeals, setTodayMeals] = useState<DailyMeal[]>([]);
   const [mealsLoading, setMealsLoading] = useState(false);
+  const [groceryCount, setGroceryCount] = useState(0);
 
   const [quote, setQuote] = useState(HEALTH_QUOTES[0]);
   const scrollY = React.useRef(new Animated.Value(0)).current;
@@ -145,37 +147,64 @@ export default function HomeScreen() {
   }, []);
   const USER_ID = 1;
 
-  // =========================================================
-  // TODAY'S MEALS
-  // =========================================================
+// =========================================================
+// TODAY'S MEALS
+// =========================================================
 
-  const loadTodayMeals = useCallback(async () => {
-    try {
-      setMealsLoading(true);
+const loadTodayMeals = useCallback(async () => {
+  try {
+    setMealsLoading(true);
 
-      const response = await getTodayMeals(USER_ID);
+    const response = await getTodayMeals(USER_ID);
 
-      if (response.success) {
-        setTodayMeals(response.meals || []);
-      } else {
-        setTodayMeals([]);
-      }
-    } catch (error) {
-      console.log("Today's meals error:", error);
+    if (response.success) {
+      setTodayMeals(response.meals || []);
+    } else {
       setTodayMeals([]);
-    } finally {
-      setMealsLoading(false);
     }
-  }, []);
+  } catch (error) {
+    console.log("Today's meals error:", error);
+    setTodayMeals([]);
+  } finally {
+    setMealsLoading(false);
+  }
+}, []);
+
+const loadGroceryCount = useCallback(async () => {
+  try {
+    const response = await getGroceryList(USER_ID);
+
+    if (response.success) {
+      setGroceryCount(
+        Array.isArray(response.items)
+          ? response.items.length
+          : 0
+      );
+    } else {
+      setGroceryCount(0);
+    }
+  } catch (error) {
+    console.log("Grocery count error:", error);
+    setGroceryCount(0);
+  }
+}, []);
+
+useFocusEffect(
+  useCallback(() => {
+    loadTodayMeals();
+    loadGroceryCount();
+  }, [loadTodayMeals, loadGroceryCount])
+);
 
   // Reload whenever Home gets focus.
   // This immediately picks up a meal plan generated on
   // another screen and refreshes the current day's meals.
   useFocusEffect(
-    useCallback(() => {
-      loadTodayMeals();
-    }, [loadTodayMeals])
-  );
+  useCallback(() => {
+    loadTodayMeals();
+    loadGroceryCount();
+  }, [loadTodayMeals, loadGroceryCount])
+);
 
   // Refresh automatically at local midnight.
   // This avoids making an API request every minute.
@@ -1452,21 +1481,22 @@ export default function HomeScreen() {
                 strokeWidth={2}
               />
 
-              <View
-                style={[
-                  styles.badge,
-                  {
-                    backgroundColor: colors.primary,
-                    borderColor: colors.card,
-                  },
-                ]}
-              >
-                <Text style={styles.badgeText}>
-                  2
-                </Text>
-              </View>
+              {groceryCount > 0 && (
+                <View
+                  style={[
+                    styles.badge,
+                    {
+                      backgroundColor: colors.primary,
+                      borderColor: colors.card,
+                    },
+                  ]}
+                >
+                  <Text style={styles.badgeText}>
+                    {groceryCount}
+                  </Text>
+                </View>
+              )}
             </View>
-
             <Text
               style={[
                 styles.navText,

@@ -1,4 +1,3 @@
-
 import React, {
   useCallback,
   useEffect,
@@ -11,6 +10,7 @@ import {
   Alert,
   Animated,
   Pressable,
+  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
@@ -38,6 +38,7 @@ import {
 } from "../services/api";
 
 const USER_ID = 1;
+
 const SILENCE_DURATION_MS = 1800;
 const MAX_RECORDING_MS = 30000;
 const SPEECH_THRESHOLD_DB = -42;
@@ -55,8 +56,10 @@ export default function VoiceScreen() {
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+
   const [transcript, setTranscript] = useState("");
   const [answer, setAnswer] = useState("");
+
   const [statusText, setStatusText] = useState(
     "Tap the microphone and start speaking"
   );
@@ -127,6 +130,7 @@ export default function VoiceScreen() {
           duration: 1200,
           useNativeDriver: true,
         }),
+
         Animated.timing(pulse, {
           toValue: 1,
           duration: 1200,
@@ -182,8 +186,12 @@ export default function VoiceScreen() {
         );
       }
 
-      const FileSystem = await import("expo-file-system/legacy");
-      const fileInfo = await FileSystem.getInfoAsync(recordedUri);
+      const FileSystem = await import(
+        "expo-file-system/legacy"
+      );
+
+      const fileInfo =
+        await FileSystem.getInfoAsync(recordedUri);
 
       if (
         !fileInfo.exists ||
@@ -209,12 +217,15 @@ export default function VoiceScreen() {
         );
       }
 
-      console.log("Recognized question:", recognizedText);
+      console.log(
+        "Recognized question:",
+        recognizedText
+      );
 
       setTranscript(recognizedText);
       setIsTranscribing(false);
 
-      // STEP 2: Send the question to your FastAPI /chat endpoint.
+      // STEP 2: Send the question to FastAPI /chat.
       setIsThinking(true);
       setStatusText("Meal Planner is thinking...");
 
@@ -236,10 +247,13 @@ export default function VoiceScreen() {
       setAnswer(responseText);
       setIsThinking(false);
 
-      // STEP 3: Generate speech using the FastAPI /tts endpoint.
-      setStatusText("Preparing your voice response...");
+      // STEP 3: Generate speech.
+      setStatusText(
+        "Preparing your voice response..."
+      );
 
-      const audioBase64 = await textToSpeech(responseText);
+      const audioBase64 =
+        await textToSpeech(responseText);
 
       if (!audioBase64) {
         throw new Error(
@@ -247,7 +261,7 @@ export default function VoiceScreen() {
         );
       }
 
-      // STEP 4: Save the MP3 audio locally on the phone.
+      // STEP 4: Save MP3 locally.
       const audioUri =
         `${FileSystem.cacheDirectory}meal_planner_reply_${Date.now()}.mp3`;
 
@@ -259,7 +273,7 @@ export default function VoiceScreen() {
         }
       );
 
-      // STEP 5: Play the audio on the phone.
+      // STEP 5: Play audio.
       await setAudioModeAsync({
         allowsRecording: false,
         playsInSilentMode: true,
@@ -268,77 +282,110 @@ export default function VoiceScreen() {
       setIsSpeaking(true);
       setStatusText("Meal Planner is speaking...");
 
-      
-const player = createAudioPlayer({ uri: audioUri });
+      const player = createAudioPlayer({
+        uri: audioUri,
+      });
 
-try {
-  // Make sure the player is not muted.
-  player.volume = 1;
-  player.muted = false;
+      try {
+        player.volume = 1;
+        player.muted = false;
 
-  console.log("TTS Base64 length:", audioBase64.length);
-  console.log("Saved audio URI:", audioUri);
-
-  const audioInfo = await FileSystem.getInfoAsync(audioUri);
-  console.log("Saved audio file:", audioInfo);
-
-  if (
-    !audioInfo.exists ||
-    !("size" in audioInfo) ||
-    audioInfo.size <= 0
-  ) {
-    throw new Error("The generated audio file is empty.");
-  }
-
-  setIsSpeaking(true);
-  setStatusText("Meal Planner is speaking...");
-
-  await new Promise<void>((resolve, reject) => {
-    let finished = false;
-
-    const subscription = player.addListener(
-      "playbackStatusUpdate",
-      (status) => {
-        console.log("Audio playback status:", status);
-
-        if (status.didJustFinish && !finished) {
-          finished = true;
-          subscription.remove();
-          resolve();
-        }
-      }
-    );
-
-    try {
-      player.play();
-    } catch (error) {
-      if (!finished) {
-        finished = true;
-        subscription.remove();
-
-        reject(
-          error instanceof Error
-            ? error
-            : new Error("Audio playback failed.")
+        console.log(
+          "TTS Base64 length:",
+          audioBase64.length
         );
-      }
-    }
-  });
-} finally {
-  player.remove();
-  setIsSpeaking(false);
 
+        console.log(
+          "Saved audio URI:",
+          audioUri
+        );
+
+        const audioInfo =
+          await FileSystem.getInfoAsync(audioUri);
+
+        console.log(
+          "Saved audio file:",
+          audioInfo
+        );
+
+        if (
+          !audioInfo.exists ||
+          !("size" in audioInfo) ||
+          audioInfo.size <= 0
+        ) {
+          throw new Error(
+            "The generated audio file is empty."
+          );
+        }
+
+        setIsSpeaking(true);
+        setStatusText(
+          "Meal Planner is speaking..."
+        );
+
+        await new Promise<void>(
+          (resolve, reject) => {
+            let finished = false;
+
+            const subscription =
+              player.addListener(
+                "playbackStatusUpdate",
+                (status) => {
+                  console.log(
+                    "Audio playback status:",
+                    status
+                  );
+
+                  if (
+                    status.didJustFinish &&
+                    !finished
+                  ) {
+                    finished = true;
+                    subscription.remove();
+                    resolve();
+                  }
+                }
+              );
+
+            try {
+              player.play();
+            } catch (error) {
+              if (!finished) {
+                finished = true;
+                subscription.remove();
+
+                reject(
+                  error instanceof Error
+                    ? error
+                    : new Error(
+                        "Audio playback failed."
+                      )
+                );
+              }
+            }
+          }
+        );
+      } finally {
+        player.remove();
+        setIsSpeaking(false);
       }
 
       setStatusText(
         "Tap the microphone to ask another question"
       );
 
-      console.log("Voice response finished.");
+      console.log(
+        "Voice response finished."
+      );
     } catch (error) {
-      console.error("Voice assistant error:", error);
+      console.error(
+        "Voice assistant error:",
+        error
+      );
 
-      setStatusText("Tap the microphone to try again");
+      setStatusText(
+        "Tap the microphone to try again"
+      );
 
       if (mountedRef.current) {
         Alert.alert(
@@ -366,7 +413,10 @@ try {
             playsInSilentMode: true,
           });
         } catch (error) {
-          console.warn("Could not restore audio mode:", error);
+          console.warn(
+            "Could not restore audio mode:",
+            error
+          );
         }
       }
     }
@@ -374,11 +424,19 @@ try {
 
   // Automatically stop after the user pauses speaking.
   useEffect(() => {
-    if (!isRecording || !recordingRef.current) return;
+    if (
+      !isRecording ||
+      !recordingRef.current
+    ) {
+      return;
+    }
 
     const level = recorderState.metering;
 
-    if (typeof level !== "number" || !Number.isFinite(level)) {
+    if (
+      typeof level !== "number" ||
+      !Number.isFinite(level)
+    ) {
       return;
     }
 
@@ -386,11 +444,17 @@ try {
       speechDetectedRef.current = true;
 
       if (silenceTimerRef.current) {
-        clearTimeout(silenceTimerRef.current);
+        clearTimeout(
+          silenceTimerRef.current
+        );
+
         silenceTimerRef.current = null;
       }
 
-      setStatusText("Listening... pause when you finish");
+      setStatusText(
+        "Listening... pause when you finish"
+      );
+
       return;
     }
 
@@ -401,10 +465,11 @@ try {
       return;
     }
 
-    silenceTimerRef.current = setTimeout(() => {
-      silenceTimerRef.current = null;
-      void stopAndSubmit();
-    }, SILENCE_DURATION_MS);
+    silenceTimerRef.current =
+      setTimeout(() => {
+        silenceTimerRef.current = null;
+        void stopAndSubmit();
+      }, SILENCE_DURATION_MS);
   }, [
     recorderState.metering,
     isRecording,
@@ -421,7 +486,10 @@ try {
 
     return () => {
       if (maxTimerRef.current) {
-        clearTimeout(maxTimerRef.current);
+        clearTimeout(
+          maxTimerRef.current
+        );
+
         maxTimerRef.current = null;
       }
     };
@@ -433,13 +501,18 @@ try {
       clearTimers();
 
       if (recordingRef.current) {
-        void recorder.stop().catch(() => undefined);
+        void recorder
+          .stop()
+          .catch(() => undefined);
       }
     };
   }, [clearTimers, recorder]);
 
   const startRecording = async () => {
-    if (processingRef.current || recordingRef.current) {
+    if (
+      processingRef.current ||
+      recordingRef.current
+    ) {
       return;
     }
 
@@ -455,6 +528,7 @@ try {
             "Permission Required",
             "Please allow microphone access in Android Settings."
           );
+
           return;
         }
 
@@ -463,7 +537,9 @@ try {
 
       setTranscript("");
       setAnswer("");
-      setStatusText("Starting microphone...");
+      setStatusText(
+        "Starting microphone..."
+      );
 
       await setAudioModeAsync({
         allowsRecording: true,
@@ -471,19 +547,28 @@ try {
       });
 
       clearTimers();
+
       speechDetectedRef.current = false;
 
       await recorder.prepareToRecordAsync();
+
       recorder.record();
 
       recordingRef.current = true;
       setIsRecording(true);
 
-      setStatusText("Listening... speak your question");
+      setStatusText(
+        "Listening... speak your question"
+      );
 
-      console.log("Voice recording started.");
+      console.log(
+        "Voice recording started."
+      );
     } catch (error) {
-      console.error("Could not start recording:", error);
+      console.error(
+        "Could not start recording:",
+        error
+      );
 
       Alert.alert(
         "Recording Error",
@@ -516,11 +601,15 @@ try {
   const handleClose = async () => {
     clearTimers();
 
-    if (recordingRef.current && !processingRef.current) {
+    if (
+      recordingRef.current &&
+      !processingRef.current
+    ) {
       processingRef.current = true;
 
       try {
         await recorder.stop();
+
         recordingRef.current = false;
 
         await setAudioModeAsync({
@@ -528,7 +617,10 @@ try {
           playsInSilentMode: true,
         });
       } catch (error) {
-        console.warn("Error closing recorder:", error);
+        console.warn(
+          "Error closing recorder:",
+          error
+        );
       } finally {
         processingRef.current = false;
       }
@@ -538,15 +630,18 @@ try {
   };
 
   const busy =
-    isTranscribing || isThinking || isSpeaking;
+    isTranscribing ||
+    isThinking ||
+    isSpeaking;
 
-  const displayedStatus = isTranscribing
-    ? "Transcribing your question..."
-    : isSpeaking
-      ? "Meal Planner is speaking..."
-      : isThinking
-        ? "Meal Planner is thinking..."
-        : statusText;
+  const displayedStatus =
+    isTranscribing
+      ? "Transcribing your question..."
+      : isSpeaking
+        ? "Meal Planner is speaking..."
+        : isThinking
+          ? "Meal Planner is thinking..."
+          : statusText;
 
   return (
     <SafeAreaView
@@ -559,6 +654,7 @@ try {
       />
 
       <View style={styles.container}>
+
         <Pressable
           style={styles.settingsButton}
           onPress={() =>
@@ -574,73 +670,119 @@ try {
           />
         </Pressable>
 
+        {/* SCROLLABLE CONTENT */}
         <View style={styles.centerContent}>
-          <Animated.View
-            style={[
-              styles.orb,
-              isRecording && styles.activeOrb,
-              {
-                transform: [
-                  { scale: isRecording ? pulse : 1 },
-                ],
-              },
-            ]}
+          <ScrollView
+            style={styles.resultsScroll}
+            contentContainerStyle={
+              styles.resultsContent
+            }
+            showsVerticalScrollIndicator={true}
+            keyboardShouldPersistTaps="handled"
           >
-            <View style={styles.orbBlue} />
-            <View style={styles.orbHighlight} />
-          </Animated.View>
 
-          <Text style={styles.statusText}>
-            {displayedStatus}
-          </Text>
+            <Animated.View
+              style={[
+                styles.orb,
+                isRecording &&
+                  styles.activeOrb,
+                {
+                  transform: [
+                    {
+                      scale: isRecording
+                        ? pulse
+                        : 1,
+                    },
+                  ],
+                },
+              ]}
+            >
+              <View style={styles.orbBlue} />
 
-          {transcript !== "" && (
-            <View style={styles.resultCard}>
-              <Text style={styles.resultLabel}>
-                YOU SAID
-              </Text>
-              <Text style={styles.resultText}>
-                {transcript}
-              </Text>
-            </View>
-          )}
+              <View
+                style={styles.orbHighlight}
+              />
+            </Animated.View>
 
-          {answer !== "" && (
-            <View style={styles.resultCard}>
-              <Text style={styles.resultLabel}>
-                MEAL PLANNER
-              </Text>
-              <Text style={styles.resultText}>
-                {answer}
-              </Text>
-            </View>
-          )}
+            <Text style={styles.statusText}>
+              {displayedStatus}
+            </Text>
 
-          {busy && (
-            <ActivityIndicator
-              color="#1686F5"
-              style={{ marginTop: 15 }}
-            />
-          )}
+            {transcript !== "" && (
+              <View
+                style={styles.resultCard}
+              >
+                <Text
+                  style={styles.resultLabel}
+                >
+                  YOU SAID
+                </Text>
+
+                <Text
+                  style={styles.resultText}
+                >
+                  {transcript}
+                </Text>
+              </View>
+            )}
+
+            {answer !== "" && (
+              <View
+                style={styles.resultCard}
+              >
+                <Text
+                  style={styles.resultLabel}
+                >
+                  MEAL PLANNER
+                </Text>
+
+                <Text
+                  style={styles.resultText}
+                >
+                  {answer}
+                </Text>
+              </View>
+            )}
+
+            {busy && (
+              <ActivityIndicator
+                color="#1686F5"
+                style={{
+                  marginTop: 15,
+                }}
+              />
+            )}
+
+          </ScrollView>
         </View>
 
+        {/* FIXED BOTTOM CONTROLS */}
         <View style={styles.bottomControls}>
+
           <Pressable
             style={[
               styles.controlButton,
-              isRecording && styles.recordingButton,
-              busy && styles.disabledButton,
+              isRecording &&
+                styles.recordingButton,
+              busy &&
+                styles.disabledButton,
             ]}
             onPress={handleMicPress}
             disabled={busy}
             accessibilityLabel="Start or stop voice recording"
           >
             {busy ? (
-              <ActivityIndicator color="#222222" />
+              <ActivityIndicator
+                color="#222222"
+              />
             ) : (
               <Mic
                 size={25}
-                color={isRecording ? "#FFFFFF" : "#222222"}
+                color={
+                  isRecording
+                    ? "#FFFFFF"
+                    : "#222222"
+                }
                 strokeWidth={2.2}
               />
             )}
@@ -648,7 +790,9 @@ try {
 
           <Pressable
             style={styles.controlButton}
-            onPress={() => void handleClose()}
+            onPress={() =>
+              void handleClose()
+            }
             accessibilityLabel="Close voice assistant"
           >
             <X
@@ -657,7 +801,9 @@ try {
               strokeWidth={2.2}
             />
           </Pressable>
+
         </View>
+
       </View>
     </SafeAreaView>
   );
@@ -686,12 +832,34 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
 
+  /*
+   * The center area takes the available space.
+   * minHeight: 0 is important so ScrollView
+   * is allowed to shrink inside the flex layout.
+   */
   centerContent: {
     flex: 1,
+    minHeight: 0,
+  },
+
+  /*
+   * Scrollable response area.
+   */
+  resultsScroll: {
+    flex: 1,
+  },
+
+  /*
+   * Allows the content to fill the screen when
+   * the answer is short, while still allowing
+   * scrolling when the answer becomes long.
+   */
+  resultsContent: {
+    flexGrow: 1,
     alignItems: "center",
     justifyContent: "center",
     paddingTop: 36,
-    paddingBottom: 20,
+    paddingBottom: 24,
   },
 
   orb: {
@@ -700,10 +868,15 @@ const styles = StyleSheet.create({
     borderRadius: 94,
     overflow: "hidden",
     backgroundColor: "#DDF7FF",
+
     shadowColor: "#1686F5",
     shadowOpacity: 0.2,
     shadowRadius: 25,
-    shadowOffset: { width: 0, height: 10 },
+    shadowOffset: {
+      width: 0,
+      height: 10,
+    },
+
     elevation: 4,
   },
 
@@ -720,7 +893,11 @@ const styles = StyleSheet.create({
     height: 115,
     borderRadius: 90,
     backgroundColor: "#1686F5",
-    transform: [{ rotate: "-10deg" }],
+    transform: [
+      {
+        rotate: "-10deg",
+      },
+    ],
   },
 
   orbHighlight: {
@@ -732,7 +909,11 @@ const styles = StyleSheet.create({
     borderRadius: 40,
     backgroundColor: "#A5E8FA",
     opacity: 0.95,
-    transform: [{ rotate: "-25deg" }],
+    transform: [
+      {
+        rotate: "-25deg",
+      },
+    ],
   },
 
   statusText: {
@@ -743,9 +924,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
 
+  /*
+   * IMPORTANT:
+   * No maxHeight here.
+   * The whole response can now grow inside
+   * the ScrollView.
+   */
   resultCard: {
     width: "100%",
-    maxHeight: 170,
     marginTop: 16,
     padding: 14,
     borderRadius: 14,
@@ -766,6 +952,9 @@ const styles = StyleSheet.create({
     lineHeight: 21,
   },
 
+  /*
+   * These controls stay fixed at the bottom.
+   */
   bottomControls: {
     minHeight: 96,
     paddingBottom: 16,
