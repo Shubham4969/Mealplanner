@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+
 import {
   Alert,
   KeyboardAvoidingView,
@@ -25,11 +26,17 @@ import {
 
 import { useTheme } from "../context/ThemeContext";
 
+import {
+  signUpWithEmail,
+  signInWithGoogle,
+} from "../services/firebase";
+
 export default function SignUpScreen() {
   const { colors } = useTheme();
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] =
     useState("");
@@ -40,16 +47,33 @@ export default function SignUpScreen() {
   const [showConfirmPassword, setShowConfirmPassword] =
     useState(false);
 
-  const handleSignUp = () => {
+  const [loading, setLoading] = useState(false);
+
+  // =========================================================
+  // EMAIL/PASSWORD SIGN UP
+  // =========================================================
+
+  const handleSignUp = async () => {
+    const cleanName = name.trim();
+    const cleanEmail = email.trim();
+
     if (
-      !name.trim() ||
-      !email.trim() ||
+      !cleanName ||
+      !cleanEmail ||
       !password.trim() ||
       !confirmPassword.trim()
     ) {
       Alert.alert(
         "Missing information",
         "Please fill in all the fields."
+      );
+      return;
+    }
+
+    if (!cleanEmail.includes("@")) {
+      Alert.alert(
+        "Invalid email",
+        "Please enter a valid email address."
       );
       return;
     }
@@ -70,9 +94,96 @@ export default function SignUpScreen() {
       return;
     }
 
-    // Temporary navigation.
-    // Backend authentication will be connected later.
-    router.replace("/home");
+    try {
+      setLoading(true);
+
+      const userCredential = await signUpWithEmail(
+        cleanEmail,
+        password,
+        cleanName
+      );
+
+      console.log(
+        "Account created:",
+        userCredential.user.email
+      );
+
+      router.replace("/home");
+    } catch (error: any) {
+      console.error(
+        "Email sign-up error:",
+        error
+      );
+
+      let message =
+        "Unable to create your account.";
+
+      switch (error?.code) {
+        case "auth/email-already-in-use":
+          message =
+            "An account with this email already exists. Please sign in.";
+          break;
+
+        case "auth/invalid-email":
+          message =
+            "Please enter a valid email address.";
+          break;
+
+        case "auth/weak-password":
+          message =
+            "Please choose a stronger password.";
+          break;
+
+        case "auth/network-request-failed":
+          message =
+            "Network error. Please check your internet connection.";
+          break;
+
+        case "auth/operation-not-allowed":
+          message =
+            "Email/password authentication is not enabled in Firebase.";
+          break;
+      }
+
+      Alert.alert(
+        "Sign Up Failed",
+        message
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // =========================================================
+  // GOOGLE SIGN UP
+  // =========================================================
+
+  const handleGoogleSignUp = async () => {
+    try {
+      setLoading(true);
+
+      const userCredential = await signInWithGoogle();
+
+      console.log(
+        "Google account authenticated:",
+        userCredential.user.email
+      );
+
+      router.replace("/home");
+    } catch (error: any) {
+      console.error(
+        "Google sign-up error:",
+        error
+      );
+
+      Alert.alert(
+        "Google Sign-Up Failed",
+        error?.message ||
+          "Unable to continue with Google."
+      );
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -155,8 +266,6 @@ export default function SignUpScreen() {
           Join Meal Planner and start eating healthier.
         </Text>
 
-        {/* FORM */}
-
         <View style={styles.form}>
           {/* NAME */}
 
@@ -193,13 +302,12 @@ export default function SignUpScreen() {
                 },
               ]}
               placeholder="Enter your full name"
-              placeholderTextColor={
-                colors.textMuted
-              }
+              placeholderTextColor={colors.textMuted}
               value={name}
               onChangeText={setName}
               autoCapitalize="words"
               autoCorrect={false}
+              editable={!loading}
             />
           </View>
 
@@ -238,14 +346,13 @@ export default function SignUpScreen() {
                 },
               ]}
               placeholder="Enter your email"
-              placeholderTextColor={
-                colors.textMuted
-              }
+              placeholderTextColor={colors.textMuted}
               value={email}
               onChangeText={setEmail}
               keyboardType="email-address"
               autoCapitalize="none"
               autoCorrect={false}
+              editable={!loading}
             />
           </View>
 
@@ -284,20 +391,20 @@ export default function SignUpScreen() {
                 },
               ]}
               placeholder="Create a password"
-              placeholderTextColor={
-                colors.textMuted
-              }
+              placeholderTextColor={colors.textMuted}
               value={password}
               onChangeText={setPassword}
               secureTextEntry={!showPassword}
               autoCapitalize="none"
               autoCorrect={false}
+              editable={!loading}
             />
 
             <Pressable
               onPress={() =>
                 setShowPassword(!showPassword)
               }
+              disabled={loading}
             >
               {showPassword ? (
                 <EyeOff
@@ -348,16 +455,13 @@ export default function SignUpScreen() {
                 },
               ]}
               placeholder="Confirm your password"
-              placeholderTextColor={
-                colors.textMuted
-              }
+              placeholderTextColor={colors.textMuted}
               value={confirmPassword}
               onChangeText={setConfirmPassword}
-              secureTextEntry={
-                !showConfirmPassword
-              }
+              secureTextEntry={!showConfirmPassword}
               autoCapitalize="none"
               autoCorrect={false}
+              editable={!loading}
             />
 
             <Pressable
@@ -366,6 +470,7 @@ export default function SignUpScreen() {
                   !showConfirmPassword
                 )
               }
+              disabled={loading}
             >
               {showConfirmPassword ? (
                 <EyeOff
@@ -381,19 +486,23 @@ export default function SignUpScreen() {
             </Pressable>
           </View>
 
-          {/* SIGN UP BUTTON */}
+          {/* SIGN UP */}
 
           <Pressable
             style={[
               styles.signUpButton,
               {
                 backgroundColor: colors.primary,
+                opacity: loading ? 0.6 : 1,
               },
             ]}
             onPress={handleSignUp}
+            disabled={loading}
           >
             <Text style={styles.signUpText}>
-              Create Account
+              {loading
+                ? "Creating Account..."
+                : "Create Account"}
             </Text>
           </Pressable>
 
@@ -438,14 +547,11 @@ export default function SignUpScreen() {
               {
                 backgroundColor: colors.card,
                 borderColor: colors.border,
+                opacity: loading ? 0.6 : 1,
               },
             ]}
-            onPress={() =>
-              Alert.alert(
-                "Coming soon",
-                "Google Sign Up will be connected later."
-              )
-            }
+            onPress={handleGoogleSignUp}
+            disabled={loading}
           >
             <Text style={styles.googleG}>
               G
@@ -481,6 +587,7 @@ export default function SignUpScreen() {
               onPress={() =>
                 router.replace("/sign-in")
               }
+              disabled={loading}
             >
               <Text
                 style={[
@@ -499,6 +606,10 @@ export default function SignUpScreen() {
     </KeyboardAvoidingView>
   );
 }
+
+// =========================================================
+// STYLES
+// =========================================================
 
 const styles = StyleSheet.create({
   container: {

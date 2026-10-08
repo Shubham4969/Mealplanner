@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "935203519726",
+    "project_id": "meal-planner-cfae5",
+    "storage_bucket": "meal-planner-cfae5.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:935203519726:android:13fe833a807f33e6b407ff",
+        "android_client_info": {
+          "package_name": "com.anonymous.Mobile"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "935203519726-4u58fkkedv69n5v0c9f08fl2leq5rpmb.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDtGS9A4MOpjGeG0PsLJrF-wXHSfzZAByM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "935203519726-4u58fkkedv69n5v0c9f08fl2leq5rpmb.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

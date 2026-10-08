@@ -1,4 +1,8 @@
 import React, { useState } from "react";
+
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { syncUserWithBackend } from "../services/api";
+
 import {
   Alert,
   KeyboardAvoidingView,
@@ -14,6 +18,12 @@ import {
 import { router } from "expo-router";
 
 import {
+  signInWithEmailAndPassword,
+} from "firebase/auth";
+
+import { auth } from "../services/firebase";
+
+import {
   ArrowLeft,
   Eye,
   EyeOff,
@@ -24,26 +34,263 @@ import {
 
 import { useTheme } from "../context/ThemeContext";
 
+import {
+  signInWithEmail,
+  signInWithGoogle,
+  resetPassword,
+} from "../services/firebase";
+
 export default function SignInScreen() {
   const { colors } = useTheme();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] =
-    useState(false);
 
-  const handleSignIn = () => {
-    if (!email.trim() || !password.trim()) {
+  const [showPassword, setShowPassword] = useState(false);
+
+  const [loading, setLoading] = useState(false);
+
+  // =========================================================
+  // EMAIL/PASSWORD SIGN IN
+  // =========================================================
+
+  const getAuthErrorMessage = (code?: string) => {
+  switch (code) {
+    case "auth/invalid-credential":
+      return "Invalid email or password.";
+
+    case "auth/user-not-found":
+      return "No account found with this email.";
+
+    case "auth/wrong-password":
+      return "Incorrect password.";
+
+    case "auth/invalid-email":
+      return "Please enter a valid email address.";
+
+    case "auth/user-disabled":
+      return "This account has been disabled.";
+
+    case "auth/too-many-requests":
+      return "Too many attempts. Please try again later.";
+
+    case "auth/network-request-failed":
+      return "Network error. Please check your internet connection.";
+
+    default:
+      return "Unable to sign in. Please try again.";
+  }
+};
+  const handleSignIn = async () => {
+  if (!email.trim() || !password) {
+    Alert.alert(
+      "Missing information",
+      "Please enter your email and password."
+    );
+    return;
+  }
+
+  try {
+    setLoading(true);
+
+    // 1. Firebase login
+    const credential = await signInWithEmailAndPassword(
+      auth,
+      email.trim(),
+      password
+    );
+
+    const firebaseUser = credential.user;
+
+    console.log(
+      "Email sign-in successful:",
+      firebaseUser.email
+    );
+
+    // 2. Get Firebase user information
+    const authenticatedEmail =
+      firebaseUser.email?.trim().toLowerCase();
+
+    const firebaseUid = firebaseUser.uid;
+
+    const displayName =
+      firebaseUser.displayName?.trim() || null;
+
+    if (!authenticatedEmail) {
+      throw new Error(
+        "Firebase account does not have an email address."
+      );
+    }
+
+    // 3. Sync Firebase user with PostgreSQL
+    console.log("Syncing user with backend...");
+
+    const syncResponse = await syncUserWithBackend(
+      authenticatedEmail,
+      displayName,
+      firebaseUid
+    );
+
+    console.log(
+      "Backend sync response:",
+      syncResponse
+    );
+
+    // 4. Make sure backend returned numeric user_id
+    if (
+      !syncResponse.success ||
+      !syncResponse.data?.user_id
+    ) {
+      throw new Error(
+        syncResponse.message ||
+        "Backend user synchronization failed."
+      );
+    }
+
+    const backendUserId =
+      syncResponse.data.user_id;
+
+    console.log(
+      "Backend user_id:",
+      backendUserId
+    );
+
+    // 5. Save PostgreSQL user_id
+    await AsyncStorage.setItem(
+      "user_id",
+      String(backendUserId)
+    );
+
+    // Optional but useful
+    await AsyncStorage.setItem(
+      "user_email",
+      authenticatedEmail
+    );
+
+    await AsyncStorage.setItem(
+      "user_name",
+      displayName ||
+        authenticatedEmail.split("@")[0]
+    );
+
+    // 6. Verify that it was actually saved
+    const savedUserId =
+      await AsyncStorage.getItem("user_id");
+
+    console.log(
+      "Saved AsyncStorage user_id:",
+      savedUserId
+    );
+
+    if (!savedUserId) {
+      throw new Error(
+        "Failed to save user_id in AsyncStorage."
+      );
+    }
+
+    // 7. Now go to home
+    router.replace("/home");
+
+  } catch (error: any) {
+    console.log(
+      "Email sign-in error:",
+      error
+    );
+
+    Alert.alert(
+      "Sign in failed",
+      error?.message ||
+        getAuthErrorMessage(error?.code)
+    );
+  } finally {
+    setLoading(false);
+  }
+};
+
+  // =========================================================
+  // GOOGLE SIGN IN
+  // =========================================================
+
+  const handleGoogleSignIn = async () => {
+    try {
+      setLoading(true);
+
+      const userCredential = await signInWithGoogle();
+
+      console.log(
+        "Google sign-in successful:",
+        userCredential.user.email
+      );
+
+      router.replace("/home");
+    } catch (error: any) {
+      console.error("Google sign-in error:", error);
+
+      const message =
+        error?.message ||
+        "Unable to sign in with Google.";
+
       Alert.alert(
-        "Missing information",
-        "Please enter your email and password."
+        "Google Sign-In Failed",
+        message
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // =========================================================
+  // FORGOT PASSWORD
+  // =========================================================
+
+  const handleForgotPassword = async () => {
+    const cleanEmail = email.trim();
+
+    if (!cleanEmail) {
+      Alert.alert(
+        "Enter your email",
+        "Please enter your email address first."
       );
       return;
     }
 
-    // Temporary navigation.
-    // We will connect this to your backend authentication later.
-    router.replace("/home");
+    if (!cleanEmail.includes("@")) {
+      Alert.alert(
+        "Invalid email",
+        "Please enter a valid email address."
+      );
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      await resetPassword(cleanEmail);
+
+      Alert.alert(
+        "Password reset email sent",
+        "Check your email for instructions to reset your password."
+      );
+    } catch (error: any) {
+      console.error(
+        "Password reset error:",
+        error
+      );
+
+      let message =
+        "Unable to send password reset email.";
+
+      if (error?.code === "auth/invalid-email") {
+        message = "Please enter a valid email address.";
+      }
+
+      Alert.alert(
+        "Password Reset Failed",
+        message
+      );
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -65,6 +312,8 @@ export default function SignInScreen() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
+        {/* BACK BUTTON */}
+
         <Pressable
           style={[
             styles.backButton,
@@ -80,6 +329,8 @@ export default function SignInScreen() {
             color={colors.text}
           />
         </Pressable>
+
+        {/* LOGO */}
 
         <View style={styles.logoContainer}>
           <View
@@ -97,6 +348,8 @@ export default function SignInScreen() {
             />
           </View>
         </View>
+
+        {/* TITLE */}
 
         <Text
           style={[
@@ -120,7 +373,11 @@ export default function SignInScreen() {
           Sign in to continue planning healthier meals.
         </Text>
 
+        {/* FORM */}
+
         <View style={styles.form}>
+          {/* EMAIL */}
+
           <Text
             style={[
               styles.label,
@@ -154,16 +411,17 @@ export default function SignInScreen() {
                 },
               ]}
               placeholder="Enter your email"
-              placeholderTextColor={
-                colors.textMuted
-              }
+              placeholderTextColor={colors.textMuted}
               value={email}
               onChangeText={setEmail}
               keyboardType="email-address"
               autoCapitalize="none"
               autoCorrect={false}
+              editable={!loading}
             />
           </View>
+
+          {/* PASSWORD */}
 
           <Text
             style={[
@@ -198,19 +456,20 @@ export default function SignInScreen() {
                 },
               ]}
               placeholder="Enter your password"
-              placeholderTextColor={
-                colors.textMuted
-              }
+              placeholderTextColor={colors.textMuted}
               value={password}
               onChangeText={setPassword}
               secureTextEntry={!showPassword}
               autoCapitalize="none"
+              autoCorrect={false}
+              editable={!loading}
             />
 
             <Pressable
               onPress={() =>
                 setShowPassword(!showPassword)
               }
+              disabled={loading}
             >
               {showPassword ? (
                 <EyeOff
@@ -226,14 +485,12 @@ export default function SignInScreen() {
             </Pressable>
           </View>
 
+          {/* FORGOT PASSWORD */}
+
           <Pressable
             style={styles.forgotButton}
-            onPress={() =>
-              Alert.alert(
-                "Coming soon",
-                "Password recovery will be connected to the backend."
-              )
-            }
+            onPress={handleForgotPassword}
+            disabled={loading}
           >
             <Text
               style={[
@@ -247,19 +504,25 @@ export default function SignInScreen() {
             </Text>
           </Pressable>
 
+          {/* SIGN IN */}
+
           <Pressable
             style={[
               styles.signInButton,
               {
                 backgroundColor: colors.primary,
+                opacity: loading ? 0.6 : 1,
               },
             ]}
             onPress={handleSignIn}
+            disabled={loading}
           >
             <Text style={styles.signInText}>
-              Sign In
+              {loading ? "Signing In..." : "Sign In"}
             </Text>
           </Pressable>
+
+          {/* OR */}
 
           <View style={styles.dividerContainer}>
             <View
@@ -292,20 +555,19 @@ export default function SignInScreen() {
             />
           </View>
 
+          {/* GOOGLE */}
+
           <Pressable
             style={[
               styles.googleButton,
               {
                 backgroundColor: colors.card,
                 borderColor: colors.border,
+                opacity: loading ? 0.6 : 1,
               },
             ]}
-            onPress={() =>
-              Alert.alert(
-                "Coming soon",
-                "Google Sign In will be connected later."
-              )
-            }
+            onPress={handleGoogleSignIn}
+            disabled={loading}
           >
             <Text style={styles.googleG}>
               G
@@ -323,6 +585,8 @@ export default function SignInScreen() {
             </Text>
           </Pressable>
 
+          {/* SIGN UP */}
+
           <View style={styles.signupContainer}>
             <Text
               style={[
@@ -339,6 +603,7 @@ export default function SignInScreen() {
               onPress={() =>
                 router.push("/sign-up")
               }
+              disabled={loading}
             >
               <Text
                 style={[
@@ -357,6 +622,10 @@ export default function SignInScreen() {
     </KeyboardAvoidingView>
   );
 }
+
+// =========================================================
+// STYLES
+// =========================================================
 
 const styles = StyleSheet.create({
   container: {

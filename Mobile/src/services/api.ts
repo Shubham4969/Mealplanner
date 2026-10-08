@@ -699,3 +699,35 @@ export async function textToSpeech(
 
   return result.audio_base64;
 }
+
+export interface SyncUserResponse {
+  success: boolean;
+  message?: string;
+
+  data?: {
+    user_id: number;
+    email: string;
+    name?: string | null;
+    firebase_uid: string;
+  };
+}
+
+export async function syncUserWithBackend(
+  email: string,
+  name: string | null,
+  firebaseUid: string
+): Promise<SyncUserResponse> {
+
+  return apiRequest<SyncUserResponse>(
+    "/auth/sync-user",
+    {
+      method: "POST",
+
+      body: JSON.stringify({
+        email: email.trim().toLowerCase(),
+        name: name?.trim() || null,
+        firebase_uid: firebaseUid,
+      }),
+    }
+  );
+}
