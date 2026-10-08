@@ -2,6 +2,7 @@ import json
 import re
 import httpx
 import os
+from pydantic import BaseModel
 
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -21,6 +22,8 @@ from sqlalchemy import (
 )
 
 from agents import Agent, Runner, SQLiteSession
+
+from typing import Any, Dict, Optional
 
 from Agents.meal_agent import meal_agent
 from Orchestrator import orchestrator_agent
@@ -268,6 +271,12 @@ class ProfileUpdateRequest(BaseModel):
     cuisine_preferences: Optional[Any] = None
 
 
+class SyncUserRequest(BaseModel):
+    email: str
+    name: Optional[str] = None
+    firebase_uid: str
+
+
 # ============================================================
 # BASIC ENDPOINTS
 # ============================================================
@@ -297,6 +306,184 @@ async def test():
         "success": True,
         "message": "React Native connected to FastAPI!",
     }
+    # ============================================================
+# FIREBASE USER SYNC
+# ============================================================
+
+@app.post("/auth/sync-user")
+async def sync_user(request: SyncUserRequest):
+
+    db_session = SessionLocal()
+
+    try:
+
+        email = request.email.strip().lower()
+        firebase_uid = request.firebase_uid.strip()
+
+        name = (
+            request.name.strip()
+            if request.name
+            else None
+        )
+
+        # --------------------------------------------------------
+        # Validate input
+        # --------------------------------------------------------
+
+        if not email:
+            raise HTTPException(
+                status_code=400,
+                detail="Email is required."
+            )
+
+        if not firebase_uid:
+            raise HTTPException(
+                status_code=400,
+                detail="Firebase UID is required."
+            )
+
+        # --------------------------------------------------------
+        # 1. Try to find user by Firebase UID
+        # --------------------------------------------------------
+
+        user = (
+            db_session.query(UserProfile)
+            .filter(
+                UserProfile.firebase_uid == firebase_uid
+            )
+            .first()
+        )
+
+        # --------------------------------------------------------
+        # 1. Try to find user by Firebase UID
+        # --------------------------------------------------------
+
+        user = (
+            db_session.query(UserProfile)
+            .filter(
+                UserProfile.firebase_uid == firebase_uid
+            )
+            .first()
+        )
+
+
+            # --------------------------------------------------------
+            # 2. If Firebase UID is not found, find user by email
+            # --------------------------------------------------------
+
+        if user is None:
+
+                user = (
+                    db_session.query(UserProfile)
+                    .filter(
+                        UserProfile.email == email
+                    )
+                    .first()
+                )
+        # --------------------------------------------------------
+        # 3. If still not found, use the existing profile
+        #    for this Firebase account when appropriate.
+        #
+        #    Your current database already has:
+        #    user_id = 1 -> Shubham Kumar singh
+        # --------------------------------------------------------
+
+        if user is None:
+
+            user = (
+                db_session.query(UserProfile)
+                .filter(
+                    UserProfile.user_id == 1
+                )
+                .first()
+            )
+
+        # --------------------------------------------------------
+        # 4. Existing user
+        # --------------------------------------------------------
+
+        if user is not None:
+
+            user.email = email
+            user.firebase_uid = firebase_uid
+
+            # Only set the name if we actually received one.
+            if name:
+                user.name = name
+
+            db_session.commit()
+            db_session.refresh(user)
+
+            return {
+                "success": True,
+                "message": "User synchronized successfully.",
+                "data": {
+                    "user_id": user.user_id,
+                    "email": user.email,
+                    "name": user.name,
+                    "firebase_uid": user.firebase_uid,
+                }
+            }
+
+        # --------------------------------------------------------
+        # 5. Create a new user if no profile exists
+        # --------------------------------------------------------
+
+        # Find the next available user_id.
+        last_user = (
+            db_session.query(UserProfile)
+            .order_by(
+                UserProfile.user_id.desc()
+            )
+            .first()
+        )
+
+        next_user_id = (
+            last_user.user_id + 1
+            if last_user is not None
+            else 1
+        )
+
+        user = UserProfile(
+            user_id=next_user_id,
+            email=email,
+            firebase_uid=firebase_uid,
+            name=name,
+        )
+
+        db_session.add(user)
+        db_session.commit()
+        db_session.refresh(user)
+
+        return {
+            "success": True,
+            "message": "New user created successfully.",
+            "data": {
+                "user_id": user.user_id,
+                "email": user.email,
+                "name": user.name,
+                "firebase_uid": user.firebase_uid,
+            }
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+
+        db_session.rollback()
+
+        import traceback
+        traceback.print_exc()
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+    finally:
+
+        db_session.close()
 
 
 # ============================================================
@@ -3238,4 +3425,155 @@ async def text_to_speech(request: TTSRequest):
             status_code=500,
             detail=f"Text-to-speech failed: {exc}",
         ) from exc         
-            
+
+# ============================================================
+# FIREBASE USER SYNC
+# ============================================================
+
+@app.post("/auth/sync-user")
+async def sync_user(request: SyncUserRequest):
+
+    db_session = SessionLocal()
+
+    try:
+
+        email = request.email.strip().lower()
+
+        firebase_uid = request.firebase_uid.strip()
+
+        name = (
+            request.name.strip()
+            if request.name
+            else None
+        )
+
+        # --------------------------------------------------------
+        # Validate input
+        # --------------------------------------------------------
+
+        if not email:
+            raise HTTPException(
+                status_code=400,
+                detail="Email is required."
+            )
+
+        if not firebase_uid:
+            raise HTTPException(
+                status_code=400,
+                detail="Firebase UID is required."
+            )
+
+        # --------------------------------------------------------
+        # 1. Find user by Firebase UID
+        # --------------------------------------------------------
+
+        user = (
+            db_session.query(UserProfile)
+            .filter(
+                UserProfile.firebase_uid == firebase_uid
+            )
+            .first()
+        )
+
+        # --------------------------------------------------------
+        # 2. If Firebase UID is not found,
+        #    find user by email
+        # --------------------------------------------------------
+
+        if user is None:
+
+            user = (
+                db_session.query(UserProfile)
+                .filter(
+                    UserProfile.email == email
+                )
+                .first()
+            )
+
+        # --------------------------------------------------------
+        # 3. Existing user
+        # --------------------------------------------------------
+
+        if user is not None:
+
+            user.email = email
+            user.firebase_uid = firebase_uid
+
+            if name and not user.name:
+                user.name = name
+
+            db_session.commit()
+            db_session.refresh(user)
+
+            return {
+                "success": True,
+                "message": "User synchronized successfully.",
+                "data": {
+                    "user_id": user.user_id,
+                    "email": user.email,
+                    "name": user.name,
+                    "firebase_uid": user.firebase_uid,
+                }
+            }
+
+        # --------------------------------------------------------
+        # 4. New user
+        # --------------------------------------------------------
+
+        last_user = (
+            db_session.query(UserProfile)
+            .order_by(
+                UserProfile.user_id.desc()
+            )
+            .first()
+        )
+
+        if last_user is not None:
+            next_user_id = last_user.user_id + 1
+        else:
+            next_user_id = 1
+
+        user = UserProfile(
+            user_id=next_user_id,
+            email=email,
+            firebase_uid=firebase_uid,
+            name=name,
+        )
+
+        db_session.add(user)
+
+        db_session.commit()
+
+        db_session.refresh(user)
+
+        return {
+            "success": True,
+            "message": "New user created successfully.",
+            "data": {
+                "user_id": user.user_id,
+                "email": user.email,
+                "name": user.name,
+                "firebase_uid": user.firebase_uid,
+            }
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+
+        db_session.rollback()
+
+        import traceback
+        traceback.print_exc()
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+    finally:
+
+        db_session.close()  
+        
+                  

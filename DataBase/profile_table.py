@@ -27,6 +27,21 @@ class UserProfile(Base):
         nullable=False
     )
 
+    # Firebase / Account information
+    email = Column(
+        String,
+        unique=True,
+        nullable=True,
+        index=True
+    )
+
+    firebase_uid = Column(
+        String,
+        unique=True,
+        nullable=True,
+        index=True
+    )
+
     # Basic information
     name = Column(String)
     age = Column(Integer)
