@@ -5,9 +5,15 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
+import {
+  generateMealPlan,
+  getMealPlan,
+  getStoredUserId,
+} from "../services/api";
 
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -22,8 +28,6 @@ import {
 } from "lucide-react-native";
 
 import { useFocusEffect } from "expo-router";
-
-import { generateMealPlan, getMealPlan, getStoredUserId, } from "../services/api";
 import { useTheme } from "../context/ThemeContext";
 
 /* =========================================================
@@ -107,7 +111,10 @@ function MealIcon({
   mealType: string;
   color: string;
 }) {
-  const type = mealType.toLowerCase();
+  const type =
+  typeof mealType === "string"
+    ? mealType.toLowerCase()
+    : "";
 
   if (type.includes("breakfast")) {
     return <Coffee size={22} color={color} />;
@@ -131,7 +138,6 @@ function MealIcon({
 /* =========================================================
    MAIN SCREEN
 ========================================================= */
-
 export default function MealPlanScreen() {
   const { colors } = useTheme();
 
@@ -141,6 +147,8 @@ export default function MealPlanScreen() {
   const [loadingSavedPlan, setLoadingSavedPlan] = useState(true);
 
   const [days, setDays] = useState(1);
+  const [excludedIngredients, setExcludedIngredients] = useState("");
+
 
   /* =======================================================
      LOAD SAVED PLAN
@@ -191,13 +199,25 @@ const loadSavedMealPlan = useCallback(async () => {
   ======================================================= */
 
 
+
 const generatePlan = async () => {
   try {
     setLoading(true);
 
     const userId = await getStoredUserId();
-    const response = await generateMealPlan(userId, days);
 
+    // Convert comma-separated input into an array
+    const excludedList = excludedIngredients
+      .split(",")
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+
+     console.log("Excluded ingredients sent:", excludedList);
+    const response = await generateMealPlan(
+      userId,
+      days,
+      excludedList
+    );
     console.log("Generated meal plan:", response);
 
     const parsedPlan = parseMealPlan(response);
@@ -223,14 +243,54 @@ const generatePlan = async () => {
 };
 
 
+
+
+
   /* =======================================================
      RENDER MEAL CARD
   ======================================================= */
 
   const renderMeal = (meal: Meal, index: number) => {
+    // Protect the UI against missing or null backend values.
+    if (!meal) {
+      return null;
+    }
+
+    const mealType =
+      typeof meal.meal_type === "string" && meal.meal_type.trim()
+        ? meal.meal_type
+        : "Meal";
+
+    const mealName =
+      typeof meal.meal_name === "string" && meal.meal_name.trim()
+        ? meal.meal_name
+        : "Unnamed meal";
+
+    const description =
+      typeof meal.description === "string"
+        ? meal.description
+        : "";
+
+    const protein =
+      typeof meal.protein === "string" ? meal.protein : "";
+
+    const carbohydrates =
+      typeof meal.carbohydrates === "string"
+        ? meal.carbohydrates
+        : "";
+
+    const fat =
+      typeof meal.fat === "string" ? meal.fat : "";
+
+    const calories =
+      typeof meal.calories === "number" &&
+      Number.isFinite(meal.calories)
+        ? meal.calories
+        : null;
+
     return (
       <View
-        key={`${meal.meal_type}-${index}`}
+        key={`${mealType}-${index}`}
         style={[
           styles.mealCard,
           {
@@ -240,7 +300,6 @@ const generatePlan = async () => {
         ]}
       >
         {/* Meal header */}
-
         <View style={styles.mealHeader}>
           <View
             style={[
@@ -251,7 +310,7 @@ const generatePlan = async () => {
             ]}
           >
             <MealIcon
-              mealType={meal.meal_type}
+              mealType={mealType}
               color={colors.primary}
             />
           </View>
@@ -263,7 +322,7 @@ const generatePlan = async () => {
                 { color: colors.primary },
               ]}
             >
-              {meal.meal_type}
+              {mealType}
             </Text>
 
             <Text
@@ -272,26 +331,24 @@ const generatePlan = async () => {
                 { color: colors.text },
               ]}
             >
-              {meal.meal_name}
+              {mealName}
             </Text>
           </View>
         </View>
 
         {/* Description */}
-
-        {meal.description ? (
+        {description.trim().length > 0 ? (
           <Text
             style={[
               styles.description,
               { color: colors.textSecondary },
             ]}
           >
-            {meal.description}
+            {description}
           </Text>
         ) : null}
 
         {/* Nutrition */}
-
         <View
           style={[
             styles.nutritionRow,
@@ -300,7 +357,7 @@ const generatePlan = async () => {
             },
           ]}
         >
-          {meal.calories !== undefined && (
+          {calories !== null ? (
             <View style={styles.nutritionItem}>
               <Text
                 style={[
@@ -308,7 +365,7 @@ const generatePlan = async () => {
                   { color: colors.text },
                 ]}
               >
-                {meal.calories}
+                {calories}
               </Text>
 
               <Text
@@ -320,9 +377,9 @@ const generatePlan = async () => {
                 kcal
               </Text>
             </View>
-          )}
+          ) : null}
 
-          {meal.protein && (
+          {protein.trim().length > 0 ? (
             <View style={styles.nutritionItem}>
               <Text
                 style={[
@@ -330,7 +387,7 @@ const generatePlan = async () => {
                   { color: colors.text },
                 ]}
               >
-                {meal.protein}
+                {protein}
               </Text>
 
               <Text
@@ -342,9 +399,9 @@ const generatePlan = async () => {
                 Protein
               </Text>
             </View>
-          )}
+          ) : null}
 
-          {meal.carbohydrates && (
+          {carbohydrates.trim().length > 0 ? (
             <View style={styles.nutritionItem}>
               <Text
                 style={[
@@ -352,7 +409,7 @@ const generatePlan = async () => {
                   { color: colors.text },
                 ]}
               >
-                {meal.carbohydrates}
+                {carbohydrates}
               </Text>
 
               <Text
@@ -364,9 +421,9 @@ const generatePlan = async () => {
                 Carbs
               </Text>
             </View>
-          )}
+          ) : null}
 
-          {meal.fat && (
+          {fat.trim().length > 0 ? (
             <View style={styles.nutritionItem}>
               <Text
                 style={[
@@ -374,7 +431,7 @@ const generatePlan = async () => {
                   { color: colors.text },
                 ]}
               >
-                {meal.fat}
+                {fat}
               </Text>
 
               <Text
@@ -386,7 +443,7 @@ const generatePlan = async () => {
                 Fat
               </Text>
             </View>
-          )}
+          ) : null}
         </View>
       </View>
     );
@@ -511,6 +568,61 @@ const generatePlan = async () => {
           </View>
         </View>
 
+
+{/* Avoid Ingredients */}
+<View
+  style={[
+    styles.card,
+    {
+      backgroundColor: colors.card,
+      borderColor: colors.border,
+      marginBottom: 16,
+    },
+  ]}
+>
+  <Text
+    style={[
+      styles.sectionTitle,
+      { color: colors.text },
+    ]}
+  >
+    Avoid ingredients
+  </Text>
+
+  <Text
+    style={{
+      color: colors.textSecondary,
+      fontSize: 13,
+      marginBottom: 12,
+      lineHeight: 19,
+    }}
+  >
+    Enter ingredients you don't want in your meal plan,
+    separated by commas.
+  </Text>
+
+  <TextInput
+    value={excludedIngredients}
+    onChangeText={setExcludedIngredients}
+    placeholder="e.g. chicken, paneer, mushrooms"
+    placeholderTextColor={colors.textSecondary}
+    editable={!loading}
+    autoCapitalize="none"
+    returnKeyType="done"
+    style={{
+      minHeight: 48,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 12,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      color: colors.text,
+      backgroundColor: colors.background,
+      fontSize: 15,
+    }}
+  />
+</View>
+
         {/* =================================================
             GENERATE BUTTON
         ================================================= */}
@@ -547,6 +659,7 @@ const generatePlan = async () => {
             </>
           )}
         </TouchableOpacity>
+
 
         {/* =================================================
             LOADING SAVED PLAN

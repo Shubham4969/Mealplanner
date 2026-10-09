@@ -380,14 +380,17 @@ export interface GetMealPlanResponse {
 
 export async function generateMealPlan(
   userId: number,
-  days: number = 1
+  days: number = 1,
+  excludedIngredients: string[] = []
 ): Promise<MealPlanResponse> {
   return apiRequest<MealPlanResponse>("/meal-plan", {
     method: "POST",
-
     body: JSON.stringify({
       user_id: userId,
       days,
+      excluded_ingredients: excludedIngredients
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0),
     }),
   });
 }
@@ -402,6 +405,7 @@ export async function getMealPlan(
     }
   );
 }
+
 
 // ============================================================
 // GROCERY

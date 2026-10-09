@@ -112,7 +112,7 @@ class PantryCreateRequest(BaseModel):
 class MealPlanRequest(BaseModel):
     user_id: int = 1
     days: int = 1
-
+    excluded_ingredients: list[str] = []
 
 class PantryUpdateRequest(BaseModel):
     item: Optional[str] = None
@@ -1185,6 +1185,14 @@ async def generate_meal_plan(
                 status_code=400,
                 detail="Days must be between 1 and 7."
             )
+        excluded_ingredients = sorted(
+    {
+        item.strip()
+        for item in (request.excluded_ingredients or [])
+        if isinstance(item, str) and item.strip()
+    },
+    key=str.casefold,
+)
 
         user_profile = get_user_profile(
             db_session,
@@ -1224,7 +1232,19 @@ You are creating a personalized meal plan.
 
 ================ REQUEST =====================
 
-Create a meal plan for {request.days} day(s).
+ Create a meal plan for {request.days} day(s).
+
+EXCLUDED INGREDIENTS:
+{excluded_ingredients if excluded_ingredients else "None"}
+
+STRICT EXCLUSION RULE:
+- Never use any excluded ingredient in any meal.
+- Check every ingredient in the ingredients array.
+- Do not use an excluded ingredient under another name or as part
+  of a dish, sauce, seasoning, stock, or other ingredient.
+- If chicken is excluded, do not use chicken, chicken breast,
+  chicken stock, or other chicken-derived ingredients.
+- If paneer is excluded, do not use paneer in any meal.
 
 ================ IMPORTANT ===================
 
@@ -1343,6 +1363,7 @@ The number of objects in "days" must be exactly {request.days}.
                 detail="Meal plan JSON contains no valid days."
             )
 
+
         # ====================================================
         # VALIDATE MEAL INGREDIENTS
         # ====================================================
@@ -1419,6 +1440,68 @@ The number of objects in "days" must be exactly {request.days}.
                             )
                         )
 
+        # ====================================================
+        # VALIDATE EXCLUDED INGREDIENTS
+        # ====================================================
+
+        if excluded_ingredients:
+            excluded_patterns = [
+                re.compile(
+                    r"(?<!\w)" + re.escape(item) + r"(?!\w)",
+                    re.IGNORECASE,
+                )
+                for item in excluded_ingredients
+            ]
+
+            violations = []
+
+            for day_data in days_data:
+                if not isinstance(day_data, dict):
+                    continue
+
+                meals = day_data.get("meals", [])
+
+                if not isinstance(meals, list):
+                    continue
+
+                for meal in meals:
+                    if not isinstance(meal, dict):
+                        continue
+
+                    ingredients = meal.get("ingredients", [])
+
+                    if not isinstance(ingredients, list):
+                        continue
+
+                    for ingredient in ingredients:
+                        if not isinstance(ingredient, dict):
+                            continue
+
+                        ingredient_name = str(
+                            ingredient.get("item", "")
+                        ).strip()
+
+                        for pattern in excluded_patterns:
+                            if pattern.search(ingredient_name):
+                                violations.append({
+                                    "meal": meal.get(
+                                        "meal_name", "Unknown meal"
+                                    ),
+                                    "ingredient": ingredient_name,
+                                })
+                                break
+
+            if violations:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "message": (
+                            "The generated meal plan contains "
+                            "excluded ingredients. No plan was saved."
+                        ),
+                        "violations": violations,
+                    },
+                )
         today = date.today()
 
         # Save the complete generated plan.
