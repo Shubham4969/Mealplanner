@@ -1440,68 +1440,62 @@ The number of objects in "days" must be exactly {request.days}.
                             )
                         )
 
-        # ====================================================
+                # ====================================================
         # VALIDATE EXCLUDED INGREDIENTS
         # ====================================================
 
-        if excluded_ingredients:
-            excluded_patterns = [
-                re.compile(
-                    r"(?<!\w)" + re.escape(item) + r"(?!\w)",
-                    re.IGNORECASE,
-                )
-                for item in excluded_ingredients
-            ]
+        violations = []
 
-            violations = []
+        for day_data in days_data:
+            if not isinstance(day_data, dict):
+                continue
 
-            for day_data in days_data:
-                if not isinstance(day_data, dict):
+            meals = day_data.get("meals", [])
+            if not isinstance(meals, list):
+                continue
+
+            for meal in meals:
+                if not isinstance(meal, dict):
                     continue
 
-                meals = day_data.get("meals", [])
+                # Check the meal name, description, and ingredients.
+                fields_to_check = [
+                    str(meal.get("meal_name", "")),
+                    str(meal.get("description", "")),
+                ]
 
-                if not isinstance(meals, list):
-                    continue
-
-                for meal in meals:
-                    if not isinstance(meal, dict):
-                        continue
-
-                    ingredients = meal.get("ingredients", [])
-
-                    if not isinstance(ingredients, list):
-                        continue
-
+                ingredients = meal.get("ingredients", [])
+                if isinstance(ingredients, list):
                     for ingredient in ingredients:
-                        if not isinstance(ingredient, dict):
-                            continue
+                        if isinstance(ingredient, dict):
+                            fields_to_check.append(
+                                str(ingredient.get("item", ""))
+                            )
 
-                        ingredient_name = str(
-                            ingredient.get("item", "")
-                        ).strip()
+                for excluded in excluded_ingredients:
+                    pattern = re.compile(
+                        r"(?<!\w)" + re.escape(excluded) + r"(?!\w)",
+                        re.IGNORECASE,
+                    )
 
-                        for pattern in excluded_patterns:
-                            if pattern.search(ingredient_name):
-                                violations.append({
-                                    "meal": meal.get(
-                                        "meal_name", "Unknown meal"
-                                    ),
-                                    "ingredient": ingredient_name,
-                                })
-                                break
+                    if any(pattern.search(value) for value in fields_to_check):
+                        violations.append({
+                            "meal": meal.get("meal_name", "Unknown meal"),
+                            "excluded_ingredient": excluded,
+                        })
+                        break
 
-            if violations:
-                raise HTTPException(
-                    status_code=422,
-                    detail={
-                        "message": (
-                            "The generated meal plan contains "
-                            "excluded ingredients. No plan was saved."
-                        ),
-                        "violations": violations,
-                    },
-                )
+        if violations:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": (
+                        "The generated meal plan contains excluded "
+                        "ingredients. No plan was saved. Generate a new plan."
+                    ),
+                    "violations": violations,
+                },
+            )
         today = date.today()
 
         # Save the complete generated plan.
