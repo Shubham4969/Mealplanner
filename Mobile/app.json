@@ -63,7 +63,8 @@
       "expo-image",
       "expo-web-browser",
       "expo-font",
-      "@react-native-google-signin/google-signin"
+      "@react-native-google-signin/google-signin",
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true,

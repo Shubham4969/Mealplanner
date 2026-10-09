@@ -1,3 +1,4 @@
+
 import React, { useEffect } from "react";
 import {
   StyleSheet,
@@ -6,36 +7,43 @@ import {
 } from "react-native";
 
 import { router } from "expo-router";
+import { onAuthStateChanged } from "firebase/auth";
 import { Leaf } from "lucide-react-native";
 
+import { auth } from "../services/firebase";
 import { useTheme } from "../context/ThemeContext";
 
 export default function SplashScreen() {
   const { colors } = useTheme();
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      router.replace("/sign-in");
-    }, 2000);
+    const unsubscribe = onAuthStateChanged(
+      auth,
+      (user) => {
+        if (user) {
+          // Existing signed-in user: open the app.
+          router.replace("/home");
+        } else {
+          // New or signed-out user: show authentication.
+          router.replace("/sign-in");
+        }
+      }
+    );
 
-    return () => clearTimeout(timer);
+    return unsubscribe;
   }, []);
 
   return (
     <View
       style={[
         styles.container,
-        {
-          backgroundColor: colors.background,
-        },
+        { backgroundColor: colors.background },
       ]}
     >
       <View
         style={[
           styles.logoCircle,
-          {
-            backgroundColor: colors.primary,
-          },
+          { backgroundColor: colors.primary },
         ]}
       >
         <Leaf
@@ -48,9 +56,7 @@ export default function SplashScreen() {
       <Text
         style={[
           styles.title,
-          {
-            color: colors.text,
-          },
+          { color: colors.text },
         ]}
       >
         Meal Planner
@@ -59,41 +65,22 @@ export default function SplashScreen() {
       <Text
         style={[
           styles.subtitle,
-          {
-            color: colors.textSecondary,
-          },
+          { color: colors.textSecondary },
         ]}
       >
         Eat healthy, live better
       </Text>
 
       <View style={styles.loadingContainer}>
-        <View
-          style={[
-            styles.loadingDot,
-            {
-              backgroundColor: colors.primary,
-            },
-          ]}
-        />
-
-        <View
-          style={[
-            styles.loadingDot,
-            {
-              backgroundColor: colors.primary,
-            },
-          ]}
-        />
-
-        <View
-          style={[
-            styles.loadingDot,
-            {
-              backgroundColor: colors.primary,
-            },
-          ]}
-        />
+        {[1, 2, 3].map((dot) => (
+          <View
+            key={dot}
+            style={[
+              styles.loadingDot,
+              { backgroundColor: colors.primary },
+            ]}
+          />
+        ))}
       </View>
     </View>
   );
@@ -113,7 +100,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 25,
-
     shadowColor: "#000",
     shadowOffset: {
       width: 0,
