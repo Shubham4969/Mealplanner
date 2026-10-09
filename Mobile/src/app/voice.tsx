@@ -35,9 +35,8 @@ import {
   sendChatMessage,
   transcribeAudio,
   textToSpeech,
+  getStoredUserId,
 } from "../services/api";
-
-const USER_ID = 1;
 
 const SILENCE_DURATION_MS = 1800;
 const MAX_RECORDING_MS = 30000;
@@ -229,9 +228,11 @@ export default function VoiceScreen() {
       setIsThinking(true);
       setStatusText("Meal Planner is thinking...");
 
+      const userId = await getStoredUserId();
+
       const result = await sendChatMessage(
         recognizedText,
-        USER_ID
+        userId
       );
 
       const responseText = String(

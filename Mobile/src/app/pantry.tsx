@@ -12,8 +12,6 @@ import {
   View,
 } from "react-native";
 
-const USER_ID = 1;
-
 import { useTheme } from "../context/ThemeContext";
 
 import * as ImagePicker from "expo-image-picker";
@@ -29,6 +27,7 @@ import {
 } from "lucide-react-native";
 
 import {
+  getStoredUserId,
   getPantry,
   addPantryItem,
   deletePantryItem,
@@ -133,6 +132,8 @@ export default function PantryScreen() {
 
   const { colors } = useTheme();
 
+  const [userId, setUserId] = useState<number | null>(null);
+
 
   // ==========================================================
   // STATE
@@ -171,85 +172,114 @@ export default function PantryScreen() {
     useState<PantryUnit>("kg");
 
 
-  // ==========================================================
-  // LOAD PANTRY FROM BACKEND
-  // ==========================================================
+// ==========================================================
+// LOAD PANTRY FROM BACKEND
+// ==========================================================
 
-  useEffect(() => {
+useEffect(() => {
 
-    loadPantry();
-
-  }, []);
-
-
-  const loadPantry = async () => {
+  const initializePantry = async () => {
 
     try {
 
-      setLoading(true);
+      const id = await getStoredUserId();
 
+      setUserId(id);
 
-      const result = await getPantry(USER_ID);
-
-
-      if (!result.success) {
-
-        throw new Error(
-          result.message ||
-          "Unable to load pantry."
-        );
-      }
-
-
-      const backendItems =
-        result.data || [];
-
-
-      const formattedItems: PantryItem[] =
-        backendItems.map(
-          (item: ApiPantryItem) => ({
-
-            id: String(item.id),
-
-            name: item.item,
-
-            quantity: String(
-              item.quantity
-            ),
-
-            unit: (item.unit || getUnitForItem(item.item)) as PantryUnit,
-
-            /*
-             * Current backend does not store images.
-             */
-            image: null,
-          })
-        );
-
-
-      setItems(formattedItems);
+      await loadPantry(id);
 
     } catch (error) {
 
       console.log(
-        "Load pantry error:",
+        "Pantry session error:",
         error
       );
 
-
       Alert.alert(
-        "Pantry Error",
+        "Session Error",
         error instanceof Error
           ? error.message
-          : "Unable to load pantry."
+          : "Unable to load your account."
       );
-
-    } finally {
 
       setLoading(false);
 
     }
+
   };
+
+  initializePantry();
+
+}, []);
+
+
+const loadPantry = async (currentUserId: number) => {
+
+  try {
+
+    setLoading(true);
+
+    const result = await getPantry(currentUserId);
+
+    if (!result.success) {
+
+      throw new Error(
+        result.message ||
+        "Unable to load pantry."
+      );
+    }
+
+    const backendItems =
+      result.data || [];
+
+    const formattedItems: PantryItem[] =
+      backendItems.map(
+        (item: ApiPantryItem) => ({
+
+          id: String(item.id),
+
+          name: item.item,
+
+          quantity: String(
+            item.quantity
+          ),
+
+          unit: (
+            item.unit ||
+            getUnitForItem(item.item)
+          ) as PantryUnit,
+
+          /*
+           * Current backend does not store images.
+           */
+          image: null,
+
+        })
+      );
+
+    setItems(formattedItems);
+
+  } catch (error) {
+
+    console.log(
+      "Load pantry error:",
+      error
+    );
+
+    Alert.alert(
+      "Pantry Error",
+      error instanceof Error
+        ? error.message
+        : "Unable to load pantry."
+    );
+
+  } finally {
+
+    setLoading(false);
+
+  }
+
+};
 
 
   // ==========================================================
@@ -405,11 +435,19 @@ export default function PantryScreen() {
 
   const addItem = async () => {
 
-    const itemName =
-      newItem.trim();
+  if (userId === null) {
+    Alert.alert(
+      "Session Error",
+      "Your account is not ready. Please sign in again."
+    );
+    return;
+  }
 
-    const quantityText =
-      newQuantity.trim();
+  const itemName =
+    newItem.trim();
+  const quantityText = newQuantity.trim();
+
+  // rest of your existing code...
 
 
     // --------------------------------------------------------
@@ -534,7 +572,7 @@ export default function PantryScreen() {
           itemName,
           quantity,
           selectedUnit,
-          USER_ID
+          userId
         );
 
       if (!result.success) {
@@ -643,6 +681,13 @@ export default function PantryScreen() {
   const removeItem = (
     id: string
   ) => {
+    if (userId === null) {
+  Alert.alert(
+    "Session Error",
+    "Your account is not ready. Please sign in again."
+  );
+  return;
+}
 
     Alert.alert(
       "Remove Item",
@@ -668,7 +713,7 @@ export default function PantryScreen() {
               const result =
                 await deletePantryItem(
                   Number(id),
-                  USER_ID
+                  userId
                 );
 
 
@@ -718,79 +763,80 @@ export default function PantryScreen() {
 
 
   // ==========================================================
-  // UPDATE QUANTITY
-  // ==========================================================
+// UPDATE QUANTITY
+// ==========================================================
+const updateQuantity = async (
+  id: string,
+  quantityText: string
+) => {
 
-  const updateQuantity = async (
-    id: string,
-    quantityText: string
-  ) => {
+  if (userId === null) {
+    Alert.alert(
+      "Session Error",
+      "Your account is not ready. Please sign in again."
+    );
+    return;
+  }
 
-    const quantity =
-      Number(quantityText);
+  const quantity =
+    Number(quantityText);
 
+  if (
+    !Number.isFinite(quantity) ||
+    quantity <= 0 ||
+    !Number.isInteger(quantity)
+  ) {
+    return;
+  }
 
-    if (
-      !Number.isFinite(quantity) ||
-      quantity <= 0 ||
-      !Number.isInteger(quantity)
-    ) {
+  try {
 
-      return;
-    }
-
-
-    try {
-
-      const result =
-        await updatePantryItem(
-          Number(id),
-          undefined,
-          quantity,
-          undefined,
-          USER_ID
-        );
-
-
-      if (!result.success) {
-
-        throw new Error(
-          result.message ||
-          "Unable to update quantity."
-        );
-      }
-
-
-      setItems(
-        (current) =>
-          current.map(
-            (item) =>
-              item.id === id
-                ? {
-                    ...item,
-                    quantity:
-                      String(quantity),
-                  }
-                : item
-          )
+    const result =
+      await updatePantryItem(
+        Number(id),
+        userId,
+        undefined,
+        quantity,
+        undefined,
       );
 
-    } catch (error) {
+    if (!result.success) {
 
-      console.log(
-        "Update quantity error:",
-        error
-      );
-
-
-      Alert.alert(
-        "Update Error",
-        error instanceof Error
-          ? error.message
-          : "Unable to update quantity."
+      throw new Error(
+        result.message ||
+        "Unable to update quantity."
       );
     }
-  };
+
+    setItems(
+      (current) =>
+        current.map(
+          (item) =>
+            item.id === id
+              ? {
+                  ...item,
+                  quantity:
+                    String(quantity),
+                }
+              : item
+        )
+    );
+
+  } catch (error) {
+
+    console.log(
+      "Update quantity error:",
+      error
+    );
+
+    Alert.alert(
+      "Update Error",
+      error instanceof Error
+        ? error.message
+        : "Unable to update quantity."
+    );
+  }
+};
 
 
   // ==========================================================
@@ -812,7 +858,16 @@ export default function PantryScreen() {
   };
 
   const saveEditItem = async () => {
-    if (!editingId) return;
+
+  if (userId === null) {
+    Alert.alert(
+      "Session Error",
+      "Your account is not ready. Please sign in again."
+    );
+    return;
+  }
+
+  if (!editingId) return;
 
     const itemName = editName.trim();
     const quantity = Number(editQuantity);
@@ -835,10 +890,10 @@ export default function PantryScreen() {
 
       const result = await updatePantryItem(
         Number(editingId),
+        userId,
         itemName,
         quantity,
         selectedUnit,
-        USER_ID
       );
 
       if (!result.success) {

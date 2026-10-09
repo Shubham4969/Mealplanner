@@ -12,11 +12,10 @@ import { useFocusEffect } from "expo-router";
 import { useTheme } from "../context/ThemeContext";
 import {
   getApiErrorMessage,
+  getStoredUserId,
   getNutrition,
   NutritionResponse,
 } from "../services/api";
-
-const USER_ID = 1;
 
 export default function NutritionScreen() {
   const { colors } = useTheme();
@@ -26,23 +25,29 @@ export default function NutritionScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
 
-  const loadNutrition = useCallback(async () => {
-    try {
-      setError("");
 
-      const response = await getNutrition(USER_ID);
+const loadNutrition = useCallback(async () => {
+  try {
+    setError("");
 
-      console.log("🥗 Nutrition response:", response);
+    // Get the currently signed-in user's ID
+    const userId = await getStoredUserId();
 
-      setNutrition(response);
-    } catch (err) {
-      console.error("❌ Nutrition load error:", err);
-      setError(getApiErrorMessage(err));
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
+    // Load nutrition for this user only
+    const response = await getNutrition(userId);
+
+    console.log("🥗 Nutrition response:", response);
+
+    setNutrition(response);
+  } catch (err) {
+    console.error("❌ Nutrition load error:", err);
+    setError(getApiErrorMessage(err));
+  } finally {
+    setLoading(false);
+    setRefreshing(false);
+  }
+}, []);
+
 
   useFocusEffect(
     useCallback(() => {

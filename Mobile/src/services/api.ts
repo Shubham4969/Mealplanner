@@ -1,4 +1,32 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
+
 export const API_BASE_URL = "https://mealplanner-6ec7.onrender.com";
+
+export const USER_ID_KEY = "user_id";
+
+/**
+ * Get the backend user ID belonging to the currently
+ * signed-in Firebase user.
+ */
+export async function getStoredUserId(): Promise<number> {
+  const storedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+
+  if (!storedUserId) {
+    throw new Error(
+      "Your account session is not ready. Please sign out and sign in again."
+    );
+  }
+
+  const userId = Number(storedUserId);
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    throw new Error(
+      "Your account session is invalid. Please sign out and sign in again."
+    );
+  }
+
+  return userId;
+}
 
 // ============================================================
 // TYPES
@@ -177,7 +205,7 @@ export async function testBackend() {
 
 export async function sendChatMessage(
   message: string,
-  userId: number = 1
+  userId: number
 ): Promise<ChatResponse> {
   if (!message.trim()) {
     throw new Error("Message cannot be empty.");
@@ -199,7 +227,7 @@ export async function sendChatMessage(
 
 export async function askMealPlanner(
   message: string,
-  userId: number = 1
+  userId: number
 ): Promise<ChatResponse> {
   if (!message.trim()) {
     throw new Error("Message cannot be empty.");
@@ -220,7 +248,7 @@ export async function askMealPlanner(
 // ============================================================
 
 export async function getProfile(
-  userId: number = 1
+  userId: number
 ): Promise<ApiResponse<UserProfile>> {
   return apiRequest<ApiResponse<UserProfile>>(
     `/profile/${userId}`
@@ -229,7 +257,7 @@ export async function getProfile(
 
 export async function updateProfile(
   profile: Partial<UserProfile>,
-  userId: number = 1
+  userId: number
 ): Promise<ApiResponse<UserProfile>> {
   return apiRequest<ApiResponse<UserProfile>>(
     `/profile/${userId}`,
@@ -246,7 +274,7 @@ export async function updateProfile(
 // ============================================================
 
 export async function getPantry(
-  userId: number = 1
+  userId: number
 ): Promise<ApiResponse<PantryItem[]>> {
   return apiRequest<ApiResponse<PantryItem[]>>(
     `/pantry?user_id=${userId}`,
@@ -260,7 +288,7 @@ export async function addPantryItem(
   item: string,
   quantity: number,
   unit: string,
-  userId: number = 1
+  userId: number
 ): Promise<ApiResponse<PantryItem>> {
   return apiRequest<ApiResponse<PantryItem>>(
     `/pantry?user_id=${userId}`,
@@ -278,10 +306,10 @@ export async function addPantryItem(
 
 export async function updatePantryItem(
   itemId: number,
+  userId: number,
   item?: string,
   quantity?: number,
   unit?: string,
-  userId: number = 1
 ): Promise<ApiResponse<PantryItem>> {
   const body: {
     item?: string;
@@ -313,7 +341,7 @@ export async function updatePantryItem(
 
 export async function deletePantryItem(
   itemId: number,
-  userId: number = 1
+  userId: number
 ): Promise<ApiResponse> {
   return apiRequest<ApiResponse>(
     `/pantry/${itemId}?user_id=${userId}`,
@@ -351,7 +379,7 @@ export interface GetMealPlanResponse {
 }
 
 export async function generateMealPlan(
-  userId: number = 1,
+  userId: number,
   days: number = 1
 ): Promise<MealPlanResponse> {
   return apiRequest<MealPlanResponse>("/meal-plan", {
@@ -365,7 +393,7 @@ export async function generateMealPlan(
 }
 
 export async function getMealPlan(
-  userId: number = 1
+  userId: number
 ): Promise<GetMealPlanResponse> {
   return apiRequest<GetMealPlanResponse>(
     `/meal-plan?user_id=${userId}`,
@@ -386,7 +414,7 @@ export async function getMealPlan(
  * GET /grocery?user_id=1
  */
 export async function getGroceryList(
-  userId: number = 1
+  userId: number
 ): Promise<GroceryListResponse> {
   return apiRequest<GroceryListResponse>(
     `/grocery?user_id=${userId}`,
@@ -404,7 +432,7 @@ export async function getGroceryList(
  * POST /grocery/generate?user_id=1
  */
 export async function generateGroceryList(
-  userId: number = 1
+  userId: number
 ): Promise<GroceryListResponse> {
   return apiRequest<GroceryListResponse>(
     `/grocery/generate?user_id=${userId}`,
@@ -431,7 +459,7 @@ export async function updateGroceryItem(
     unit?: string;
     purchased?: boolean;
   },
-  userId: number = 1
+  userId: number
 ): Promise<GroceryListResponse> {
   return apiRequest<GroceryListResponse>(
     `/grocery/${itemId}?user_id=${userId}`,
@@ -452,7 +480,7 @@ export async function updateGroceryItem(
  */
 export async function deleteGroceryItem(
   itemId: number,
-  userId: number = 1
+  userId: number
 ): Promise<ApiResponse> {
   return apiRequest<ApiResponse>(
     `/grocery/${itemId}?user_id=${userId}`,
@@ -487,7 +515,7 @@ export interface NutritionResponse {
 
 
 export async function getNutrition(
-  userId: number = 1
+  userId: number
 ): Promise<NutritionResponse> {
   return apiRequest<NutritionResponse>(
     `/nutrition/today?user_id=${userId}`,
@@ -529,7 +557,7 @@ export interface TodayMealsResponse {
 }
 
 export async function getTodayMeals(
-  userId: number = 1
+  userId: number
 ): Promise<TodayMealsResponse> {
   return apiRequest<TodayMealsResponse>(
     `/meals/today?user_id=${userId}`
@@ -555,7 +583,7 @@ export interface ConsumeMealResponse {
 
 export async function consumeMeal(
   mealId: number,
-  userId: number = 1
+  userId: number
 ): Promise<ConsumeMealResponse> {
   return apiRequest<ConsumeMealResponse>("/meals/consume", {
     method: "POST",
@@ -713,21 +741,39 @@ export interface SyncUserResponse {
 }
 
 export async function syncUserWithBackend(
-  email: string,
-  name: string | null,
-  firebaseUid: string
+  idToken: string,
+  name: string | null
 ): Promise<SyncUserResponse> {
+  if (!idToken.trim()) {
+    throw new Error("Firebase ID token is missing. Please sign in again.");
+  }
 
-  return apiRequest<SyncUserResponse>(
+  const response = await apiRequest<SyncUserResponse>(
     "/auth/sync-user",
     {
       method: "POST",
-
       body: JSON.stringify({
-        email: email.trim().toLowerCase(),
+        id_token: idToken,
         name: name?.trim() || null,
-        firebase_uid: firebaseUid,
       }),
     }
   );
+
+  if (!response.success || !response.data?.user_id) {
+    throw new Error(
+      response.message || "Unable to synchronize your account."
+    );
+  }
+
+  await AsyncStorage.setItem(
+    USER_ID_KEY,
+    String(response.data.user_id)
+  );
+
+  console.log(
+    "Backend user_id saved:",
+    response.data.user_id
+  );
+
+  return response;
 }

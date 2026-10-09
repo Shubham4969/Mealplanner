@@ -109,27 +109,27 @@ export default function SignInScreen() {
 
     // 2. Get Firebase user information
     const authenticatedEmail =
-      firebaseUser.email?.trim().toLowerCase();
+  firebaseUser.email?.trim().toLowerCase();
 
-    const firebaseUid = firebaseUser.uid;
+const displayName =
+  firebaseUser.displayName?.trim() || null;
 
-    const displayName =
-      firebaseUser.displayName?.trim() || null;
+if (!authenticatedEmail) {
+  throw new Error(
+    "Firebase account does not have an email address."
+  );
+}
 
-    if (!authenticatedEmail) {
-      throw new Error(
-        "Firebase account does not have an email address."
-      );
-    }
+// Get a Firebase ID token for backend verification.
+const idToken = await firebaseUser.getIdToken();
 
-    // 3. Sync Firebase user with PostgreSQL
-    console.log("Syncing user with backend...");
+// Sync Firebase user with PostgreSQL.
+console.log("Syncing user with backend...");
 
-    const syncResponse = await syncUserWithBackend(
-      authenticatedEmail,
-      displayName,
-      firebaseUid
-    );
+const syncResponse = await syncUserWithBackend(
+  idToken,
+  displayName
+);
 
     console.log(
       "Backend sync response:",

@@ -43,11 +43,13 @@ import {
 import { router, useFocusEffect } from "expo-router";
 
 import { useTheme } from "../context/ThemeContext";
+
 import {
   getTodayMeals,
   getGroceryList,
   askMealPlanner,
   transcribeAudio,
+  getStoredUserId,
   type DailyMeal,
 } from "../services/api";
 
@@ -145,17 +147,18 @@ export default function HomeScreen() {
 
     return () => clearTimeout(timeout);
   }, []);
-  const USER_ID = 1;
 
 // =========================================================
 // TODAY'S MEALS
 // =========================================================
 
+
 const loadTodayMeals = useCallback(async () => {
   try {
     setMealsLoading(true);
 
-    const response = await getTodayMeals(USER_ID);
+    const userId = await getStoredUserId();
+    const response = await getTodayMeals(userId);
 
     if (response.success) {
       setTodayMeals(response.meals || []);
@@ -170,9 +173,12 @@ const loadTodayMeals = useCallback(async () => {
   }
 }, []);
 
+
+
 const loadGroceryCount = useCallback(async () => {
   try {
-    const response = await getGroceryList(USER_ID);
+    const userId = await getStoredUserId();
+    const response = await getGroceryList(userId);
 
     if (response.success) {
       setGroceryCount(
@@ -189,17 +195,8 @@ const loadGroceryCount = useCallback(async () => {
   }
 }, []);
 
-useFocusEffect(
-  useCallback(() => {
-    loadTodayMeals();
-    loadGroceryCount();
-  }, [loadTodayMeals, loadGroceryCount])
-);
 
-  // Reload whenever Home gets focus.
-  // This immediately picks up a meal plan generated on
-  // another screen and refreshes the current day's meals.
-  useFocusEffect(
+useFocusEffect(
   useCallback(() => {
     loadTodayMeals();
     loadGroceryCount();
@@ -416,7 +413,8 @@ useFocusEffect(
       setChatLoading(true);
       setAssistantResponse("");
 
-      const response = await askMealPlanner(transcript, USER_ID);
+      const userId = await getStoredUserId();
+      const response = await askMealPlanner(transcript, userId);
       const answer =
         response.response ||
         response.message ||
@@ -607,35 +605,37 @@ useFocusEffect(
       return;
     }
 
-    try {
-      setChatLoading(true);
-      setAssistantResponse("");
-      setMessage("");
 
-      // Home "Ask Meal Planner" uses the lightweight /ask endpoint.
-      // This avoids the full orchestrator for simple questions.
-      const response = await askMealPlanner(
-        userMessage,
-        USER_ID
-      );
+try {
+  setChatLoading(true);
+  setAssistantResponse("");
+  setMessage("");
 
-      const answer =
-        response.response ||
-        response.message ||
-        "I couldn't generate an answer right now.";
+  const userId = await getStoredUserId();
 
-      setAssistantResponse(answer);
-    } catch (error: any) {
-      console.error("Quick Meal Planner error:", error);
+  const response = await askMealPlanner(
+    userMessage,
+    userId
+  );
 
-      Alert.alert(
-        "Meal Planner",
-        error?.message ||
-          "Unable to connect to the Meal Planner assistant."
-      );
-    } finally {
-      setChatLoading(false);
-    }
+  const answer =
+    response.response ||
+    response.message ||
+    "I couldn't generate an answer right now.";
+
+  setAssistantResponse(answer);
+} catch (error: any) {
+  console.error("Quick Meal Planner error:", error);
+
+  Alert.alert(
+    "Meal Planner",
+    error?.message ||
+      "Unable to connect to the Meal Planner assistant."
+  );
+} finally {
+  setChatLoading(false);
+}
+
   };
 
   return (

@@ -4,6 +4,7 @@ import React, {
   useEffect,
   useRef,
   useState,
+
 } from "react";
 
 import {
@@ -22,7 +23,7 @@ import {
 } from "react-native";
 
 import { useTheme } from "../context/ThemeContext";
-import { sendChatMessage } from "../services/api";
+import { sendChatMessage, getStoredUserId } from "../services/api";
 
 type Message = {
   id: number;
@@ -154,7 +155,8 @@ export default function ChatScreen() {
     try {
       console.log("Sending message to FastAPI:", text);
 
-      const result = await sendChatMessage(text, 1);
+       const userId = await getStoredUserId();
+       const result = await sendChatMessage(text, userId);
 
       console.log("FASTAPI RESPONSE:", result);
 

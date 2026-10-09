@@ -23,10 +23,8 @@ import {
 
 import { useFocusEffect } from "expo-router";
 
-import { generateMealPlan, getMealPlan } from "../services/api";
+import { generateMealPlan, getMealPlan, getStoredUserId, } from "../services/api";
 import { useTheme } from "../context/ThemeContext";
-
-const USER_ID = 1;
 
 /* =========================================================
    TYPES
@@ -148,35 +146,35 @@ export default function MealPlanScreen() {
      LOAD SAVED PLAN
   ======================================================= */
 
-  const loadSavedMealPlan = useCallback(async () => {
-    try {
-      setLoadingSavedPlan(true);
 
-      const response = await getMealPlan(USER_ID);
+const loadSavedMealPlan = useCallback(async () => {
+  try {
+    setLoadingSavedPlan(true);
 
-      console.log("Saved meal plan:", response);
+    const userId = await getStoredUserId();
+    const response = await getMealPlan(userId);
 
-      const parsedPlan = parseMealPlan(response);
+    console.log("Saved meal plan:", response);
 
-      if (parsedPlan) {
-        setMealPlan(parsedPlan);
+    const parsedPlan = parseMealPlan(response);
 
-        // Automatically select the saved plan duration
-        if (parsedPlan.days?.length) {
-          setDays(parsedPlan.days.length);
-        }
-      } else {
-        setMealPlan(null);
+    if (parsedPlan) {
+      setMealPlan(parsedPlan);
+
+      if (parsedPlan.days?.length) {
+        setDays(parsedPlan.days.length);
       }
-    } catch (error: any) {
-      console.error("Load meal plan error:", error);
-
-      // Don't show an error every time the user opens the page
+    } else {
       setMealPlan(null);
-    } finally {
-      setLoadingSavedPlan(false);
     }
-  }, []);
+  } catch (error: any) {
+    console.error("Load meal plan error:", error);
+    setMealPlan(null);
+  } finally {
+    setLoadingSavedPlan(false);
+  }
+}, []);
+
 
   /* =======================================================
      RELOAD WHEN SCREEN GETS FOCUS
@@ -192,35 +190,38 @@ export default function MealPlanScreen() {
      GENERATE PLAN
   ======================================================= */
 
-  const generatePlan = async () => {
-    try {
-      setLoading(true);
 
-      const response = await generateMealPlan(USER_ID, days);
+const generatePlan = async () => {
+  try {
+    setLoading(true);
 
-      console.log("Generated meal plan:", response);
+    const userId = await getStoredUserId();
+    const response = await generateMealPlan(userId, days);
 
-      const parsedPlan = parseMealPlan(response);
+    console.log("Generated meal plan:", response);
 
-      if (parsedPlan) {
-        setMealPlan(parsedPlan);
-      } else {
-        Alert.alert(
-          "Error",
-          "Meal plan was generated but could not be displayed."
-        );
-      }
-    } catch (error: any) {
-      console.error("Meal plan error:", error);
+    const parsedPlan = parseMealPlan(response);
 
+    if (parsedPlan) {
+      setMealPlan(parsedPlan);
+    } else {
       Alert.alert(
         "Error",
-        error?.message || "Failed to generate meal plan."
+        "Meal plan was generated but could not be displayed."
       );
-    } finally {
-      setLoading(false);
     }
-  };
+  } catch (error: any) {
+    console.error("Meal plan error:", error);
+
+    Alert.alert(
+      "Error",
+      error?.message || "Failed to generate meal plan."
+    );
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   /* =======================================================
      RENDER MEAL CARD
