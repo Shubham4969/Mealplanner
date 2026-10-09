@@ -2,6 +2,10 @@ import json
 import re
 import httpx
 import os
+
+import firebase_admin
+from firebase_admin import auth as firebase_auth
+from firebase_admin import credentials
 from pydantic import BaseModel
 
 from datetime import date, datetime, timedelta
@@ -240,6 +244,42 @@ app = FastAPI(
 )
 
 
+def verify_firebase_id_token(id_token: str) -> dict:
+    """Verify a Firebase ID token using server-side Admin credentials."""
+    service_account_json = os.getenv(
+        "FIREBASE_SERVICE_ACCOUNT_JSON", ""
+    ).strip()
+
+    if not service_account_json:
+        raise HTTPException(
+            status_code=500,
+            detail="Firebase Admin credentials are not configured.",
+        )
+
+    try:
+        try:
+            firebase_admin.get_app()
+        except ValueError:
+            service_account_info = json.loads(service_account_json)
+            credential = credentials.Certificate(service_account_info)
+            firebase_admin.initialize_app(credential)
+
+        return firebase_auth.verify_id_token(id_token)
+
+    except HTTPException:
+        raise
+    except (ValueError, json.JSONDecodeError):
+        raise HTTPException(
+            status_code=500,
+            detail="Firebase Admin credentials are not valid JSON.",
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired Firebase ID token.",
+        )
+
+
 # ============================================================
 # REQUEST MODELS
 # ============================================================
@@ -272,9 +312,8 @@ class ProfileUpdateRequest(BaseModel):
 
 
 class SyncUserRequest(BaseModel):
-    email: str
+    id_token: str
     name: Optional[str] = None
-    firebase_uid: str
 
 
 # ============================================================
@@ -306,98 +345,84 @@ async def test():
         "success": True,
         "message": "React Native connected to FastAPI!",
     }
-    # ============================================================
+# ============================================================
 # FIREBASE USER SYNC
 # ============================================================
 
 @app.post("/auth/sync-user")
 async def sync_user(request: SyncUserRequest):
 
+    # Verify the token before trusting any account details.
+    claims = verify_firebase_id_token(request.id_token)
+
+    firebase_uid = str(claims.get("uid") or "").strip()
+    email = str(claims.get("email") or "").strip().lower()
+
+    name = (
+        request.name.strip()
+        if request.name and request.name.strip()
+        else claims.get("name")
+    )
+
+    if not firebase_uid:
+        raise HTTPException(
+            status_code=401,
+            detail="Firebase token does not contain a valid user ID.",
+        )
+
+    if not email:
+        raise HTTPException(
+            status_code=400,
+            detail="The Firebase account does not have an email address.",
+        )
+
     db_session = SessionLocal()
 
     try:
 
-        email = request.email.strip().lower()
-        firebase_uid = request.firebase_uid.strip()
 
-        name = (
-            request.name.strip()
-            if request.name
-            else None
-        )
-
-        # --------------------------------------------------------
-        # Validate input
-        # --------------------------------------------------------
-
-        if not email:
-            raise HTTPException(
-                status_code=400,
-                detail="Email is required."
-            )
-
-        if not firebase_uid:
-            raise HTTPException(
-                status_code=400,
-                detail="Firebase UID is required."
-            )
-
-        # --------------------------------------------------------
-        # 1. Try to find user by Firebase UID
-        # --------------------------------------------------------
-
+        # 1. Find user by Firebase UID
         user = (
             db_session.query(UserProfile)
-            .filter(
-                UserProfile.firebase_uid == firebase_uid
-            )
+            .filter(UserProfile.firebase_uid == firebase_uid)
             .first()
         )
 
-
-            # --------------------------------------------------------
-            # 2. If Firebase UID is not found, find user by email
-            # --------------------------------------------------------
-
+        # 2. If not found, find user by email
         if user is None:
-
-                user = (
-                    db_session.query(UserProfile)
-                    .filter(
-                        UserProfile.email == email
-                    )
-                    .first()
-                )
-        # --------------------------------------------------------
-        # 3. If still not found, use the existing profile
-        #    for this Firebase account when appropriate.
-        #
-        #    Your current database already has:
-        #    user_id = 1 -> Shubham Kumar singh
-        # --------------------------------------------------------
-
-        if user is None:
-
             user = (
                 db_session.query(UserProfile)
-                .filter(
-                    UserProfile.user_id == 1
-                )
+                .filter(UserProfile.email == email)
                 .first()
             )
+
 
         # --------------------------------------------------------
         # 4. Existing user
         # --------------------------------------------------------
 
+
         if user is not None:
+            # Prevent linking an existing profile to a different
+            # Firebase account.
+            if (
+                user.firebase_uid
+                and user.firebase_uid != firebase_uid
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "This profile is already linked to another "
+                        "Firebase account."
+                    ),
+                )
 
             user.email = email
             user.firebase_uid = firebase_uid
 
-            # Only set the name if we actually received one.
             if name:
                 user.name = name
+
 
             db_session.commit()
             db_session.refresh(user)
@@ -863,7 +888,7 @@ IMPORTANT:
 
 Keep simple answers short.
 """,
-)        
+)
 
 
 # ============================================================
@@ -1056,7 +1081,7 @@ def delete_pantry(
 
     finally:
         session.close()
-        
+
 # ============================================================
 # MEAL PLAN ENDPOINT
 # ============================================================
@@ -2635,7 +2660,7 @@ def format_grocery_quantity(
         return round(quantity, 2), "ml"
 
     return round(quantity, 2), unit
-    
+
 
 # ============================================================
 # GROCERY ENDPOINTS
@@ -3382,7 +3407,7 @@ async def transcribe_audio(audio: UploadFile = File(...)):
         raise HTTPException(
             status_code=502,
             detail="Audio transcription failed."
-        ) 
+        )
 
 import base64
 
@@ -3412,5 +3437,5 @@ async def text_to_speech(request: TTSRequest):
         raise HTTPException(
             status_code=500,
             detail=f"Text-to-speech failed: {exc}",
-        ) from exc         
+        ) from exc
 
