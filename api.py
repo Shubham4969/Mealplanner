@@ -1529,13 +1529,6 @@ Malformed meal plan:
                 )
             )
 
-
-
-        
-        # ====================================================
-        # VALIDATE DAY-SPECIFIC AVOID PREFERENCES
-        # ====================================================
-
         
         # ====================================================
         # VALIDATE AND RETRY DAY-SPECIFIC AVOID PREFERENCES
