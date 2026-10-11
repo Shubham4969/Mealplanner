@@ -1282,6 +1282,7 @@ async def generate_meal_plan(request: MealPlanRequest):
             for item in pantry_items
         ]
 
+        
         meal_context = f"""
 
 You are creating a personalized meal plan.
@@ -1289,6 +1290,24 @@ You are creating a personalized meal plan.
 ================ USER PROFILE ================
 
 {user_profile}
+
+================ DAY-SPECIFIC FOOD PREFERENCES ================
+
+{json.dumps(normalized_day_preferences, ensure_ascii=False)}
+
+STRICT RULES:
+- Follow every day-specific food preference exactly.
+- For any day with mode "avoid", never include the avoided
+  food in a meal name, description, or ingredient.
+- Example: if Tuesday excludes chicken, do not generate
+  Chicken Dal Rice, Chicken Pulao, or any other chicken meal
+  on Tuesday.
+- Replace avoided foods with suitable alternatives.
+- An avoided food applies only to its specified weekday,
+  unless it is also in the global excluded ingredients list.
+- Check every meal against its actual weekday before
+  returning the final JSON.
+- Return only valid JSON matching the required schema.
 
 ================ PANTRY ======================
 
