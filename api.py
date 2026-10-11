@@ -1181,9 +1181,7 @@ def find_plan_meal_for_daily_meal(
 
 
 @app.post("/meal-plan")
-async def generate_meal_plan(
-    request: MealPlanRequest
-):
+async def generate_meal_plan(request: MealPlanRequest):
     db_session = SessionLocal()
 
     try:
@@ -1413,37 +1411,94 @@ The number of objects in "days" must be exactly {request.days}.
         )
         print(meal_plan_text)
         print(
-            "\n==========================================================\n"
-        )
+            "\n==========================================================\n")
 
-       
         try:
             meal_plan_data = parse_meal_plan_json(
                 meal_plan_text
             )
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
 
-            print("MEAL PLAN OUTPUT TYPE:", type(meal_plan_text))
-            print("MEAL PLAN OUTPUT:", repr(meal_plan_text))
-
-            raise HTTPException(
-                status_code=500,
-                detail=f"Meal plan parsing failed: {type(e).__name__}: {e}",
+        except json.JSONDecodeError as first_error:
+            print(
+                "[Meal Plan] Invalid JSON from agent. "
+                "Attempting one repair."
             )
 
+            repair_context = f"""
+You are repairing a malformed JSON meal plan.
 
-        days_data = meal_plan_data.get(
-            "days",
-            []
-        )
+Repair the JSON syntax only. Preserve the original meal
+names, ingredients, quantities, nutrition values, day
+assignments, and date offsets wherever possible.
+
+Requirements:
+- Return one valid JSON object.
+- Use double quotes for JSON keys and string values.
+- Add missing commas and correct invalid JSON syntax.
+- Do not include Markdown fences or explanations.
+- Keep the existing schema with a top-level "days" array.
+- Every meal must retain its ingredients array.
+- Do not invent or remove meals unnecessarily.
+
+Original parsing error:
+{first_error}
+
+Malformed meal plan:
+{meal_plan_text}
+"""
+
+            try:
+                repair_result = await Runner.run(
+                    meal_agent,
+                    repair_context,
+                )
+
+                repaired_text = repair_result.final_output
+
+                meal_plan_data = parse_meal_plan_json(
+                    repaired_text
+                )
+
+                meal_plan_text = repaired_text
+
+                print("[Meal Plan] JSON repair succeeded.")
+
+            except Exception as repair_error:
+                import traceback
+                traceback.print_exc()
+
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "Meal plan JSON remained invalid after "
+                        f"one repair attempt: {type(repair_error).__name__}: "
+                        f"{repair_error}"
+                    ),
+                )
+
+            
+        # ====================================================
+        # VALIDATE MEAL PLAN STRUCTURE
+        # ====================================================
+
+        days_data = meal_plan_data.get("days", [])
 
         if not isinstance(days_data, list) or not days_data:
             raise HTTPException(
                 status_code=500,
                 detail="Meal plan JSON contains no valid days."
             )
+
+        if len(days_data) != request.days:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"Expected {request.days} days, "
+                    f"but received {len(days_data)}."
+                )
+            )
+
+
 
         
         # ====================================================

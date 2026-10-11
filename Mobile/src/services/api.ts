@@ -142,16 +142,29 @@ async function apiRequest<T>(
       data = null;
     }
 
-    if (!response.ok) {
-      const message =
-        data?.detail ||
-        data?.message ||
-        `Backend error: ${response.status}`;
+    
+if (!response.ok) {
+  console.error("API endpoint:", endpoint);
+  console.error("HTTP status:", response.status);
+  console.error(
+    "Backend response:",
+    JSON.stringify(data, null, 2)
+  );
 
-      throw new Error(
-        `${message} (${response.status} ${response.statusText}) - ${endpoint}`
-      );
-    }
+  const detail = data?.detail ?? data?.message;
+
+  const message =
+    typeof detail === "string"
+      ? detail
+      : detail != null
+        ? JSON.stringify(detail)
+        : `Backend error: ${response.status}`;
+
+  throw new Error(
+    `${message} (${response.status} ${response.statusText}) - ${endpoint}`
+  );
+}
+
 
     return data as T;
 
