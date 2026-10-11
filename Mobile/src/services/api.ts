@@ -378,10 +378,27 @@ export interface GetMealPlanResponse {
   message?: string;
 }
 
+
+export interface DayFoodPreference {
+  day:
+    | "monday"
+    | "tuesday"
+    | "wednesday"
+    | "thursday"
+    | "friday"
+    | "saturday"
+    | "sunday";
+  mode: "avoid" | "include";
+  foods: string[];
+}
+
+
+
 export async function generateMealPlan(
   userId: number,
   days: number = 1,
-  excludedIngredients: string[] = []
+  excludedIngredients: string[] = [],
+  dayPreferences: DayFoodPreference[] = []
 ): Promise<MealPlanResponse> {
   return apiRequest<MealPlanResponse>("/meal-plan", {
     method: "POST",
@@ -391,9 +408,11 @@ export async function generateMealPlan(
       excluded_ingredients: excludedIngredients
         .map((item) => item.trim())
         .filter((item) => item.length > 0),
+      day_preferences: dayPreferences,
     }),
   });
 }
+
 
 export async function getMealPlan(
   userId: number

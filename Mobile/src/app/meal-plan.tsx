@@ -1,7 +1,6 @@
 import React, { useCallback, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   ScrollView,
   StyleSheet,
   Text,
@@ -9,11 +8,6 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import {
-  generateMealPlan,
-  getMealPlan,
-  getStoredUserId,
-} from "../services/api";
 
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -26,9 +20,15 @@ import {
   Utensils,
   Sun,
 } from "lucide-react-native";
-
-import { useFocusEffect } from "expo-router";
 import { useTheme } from "../context/ThemeContext";
+
+import {Alert,} from "react-native";
+
+import {
+  generateMealPlan,
+  getMealPlan,
+  getStoredUserId,
+} from "../services/api";
 
 /* =========================================================
    TYPES
@@ -135,25 +135,69 @@ function MealIcon({
   return <Utensils size={22} color={color} />;
 }
 
+
+/* =========================================================
+   TYPES
+========================================================= */
+type Weekday =
+  | "monday"
+  | "tuesday"
+  | "wednesday"
+  | "thursday"
+  | "friday"
+  | "saturday"
+  | "sunday";
+
 /* =========================================================
    MAIN SCREEN
 ========================================================= */
 export default function MealPlanScreen() {
   const { colors } = useTheme();
 
-  const [mealPlan, setMealPlan] = useState<MealPlanData | null>(null);
+  const [mealPlan, setMealPlan] =
+    useState<MealPlanData | null>(null);
 
   const [loading, setLoading] = useState(false);
-  const [loadingSavedPlan, setLoadingSavedPlan] = useState(true);
+  const [loadingSavedPlan, setLoadingSavedPlan] =
+    useState(true);
 
   const [days, setDays] = useState(1);
-  const [excludedIngredients, setExcludedIngredients] = useState("");
+  const [excludedIngredients, setExcludedIngredients] =
+    useState("");
 
+  // Multiple weekday selection
+  const [selectedWeekdays, setSelectedWeekdays] =
+    useState<Weekday[]>(["tuesday"]);
+
+  const [dayPreferenceMode, setDayPreferenceMode] =
+    useState<"avoid" | "include">("avoid");
+
+  const [dayPreferenceFoods, setDayPreferenceFoods] =
+    useState("chicken");
+
+  // Weekday labels
+  const weekdays: { label: string; value: Weekday }[] = [
+    { label: "Monday", value: "monday" },
+    { label: "Tuesday", value: "tuesday" },
+    { label: "Wednesday", value: "wednesday" },
+    { label: "Thursday", value: "thursday" },
+    { label: "Friday", value: "friday" },
+    { label: "Saturday", value: "saturday" },
+    { label: "Sunday", value: "sunday" },
+  ];
+
+  // Toggle weekday selection
+  const toggleWeekday = (day: Weekday) => {
+    setSelectedWeekdays((current) =>
+      current.includes(day)
+        ? current.filter((item) => item !== day)
+        : [...current, day]
+    );
+  };
 
   /* =======================================================
-     LOAD SAVED PLAN
+     RELOAD WHEN SCREEN GETS FOCUS
   ======================================================= */
-
 
 const loadSavedMealPlan = useCallback(async () => {
   try {
@@ -175,7 +219,7 @@ const loadSavedMealPlan = useCallback(async () => {
     } else {
       setMealPlan(null);
     }
-  } catch (error: any) {
+  } catch (error) {
     console.error("Load meal plan error:", error);
     setMealPlan(null);
   } finally {
@@ -185,39 +229,64 @@ const loadSavedMealPlan = useCallback(async () => {
 
 
   /* =======================================================
-     RELOAD WHEN SCREEN GETS FOCUS
-  ======================================================= */
-
-  useFocusEffect(
-    useCallback(() => {
-      loadSavedMealPlan();
-    }, [loadSavedMealPlan])
-  );
-
-  /* =======================================================
      GENERATE PLAN
   ======================================================= */
 
 
 
+/* =======================================================
+   GENERATE PLAN
+======================================================= */
 const generatePlan = async () => {
   try {
     setLoading(true);
 
     const userId = await getStoredUserId();
 
-    // Convert comma-separated input into an array
+    // Global ingredients to avoid on every day
     const excludedList = excludedIngredients
       .split(",")
       .map((item) => item.trim())
-      .filter((item) => item.length > 0);
+      .filter(Boolean);
 
-     console.log("Excluded ingredients sent:", excludedList);
+    // Parse day-specific foods
+    const preferenceFoods = dayPreferenceFoods
+      .split(",")
+      .map((food) => food.trim())
+      .filter(Boolean);
+
+    // Require at least one weekday if foods are entered
+    if (
+      preferenceFoods.length > 0 &&
+      selectedWeekdays.length === 0
+    ) {
+      Alert.alert(
+        "Select a weekday",
+        "Please select at least one weekday."
+      );
+      return;
+    }
+
+    // Create a preference for every selected weekday
+    const dayPreferences = preferenceFoods.length
+      ? selectedWeekdays.map((day) => ({
+          day,
+          mode: dayPreferenceMode,
+          foods: preferenceFoods,
+        }))
+      : [];
+
+    console.log("Excluded ingredients sent:", excludedList);
+    console.log("Day preferences sent:", dayPreferences);
+
+    // Send both global and day-specific preferences
     const response = await generateMealPlan(
       userId,
       days,
-      excludedList
+      excludedList,
+      dayPreferences
     );
+
     console.log("Generated meal plan:", response);
 
     const parsedPlan = parseMealPlan(response);
@@ -241,12 +310,7 @@ const generatePlan = async () => {
     setLoading(false);
   }
 };
-
-
-
-
-
-  /* =======================================================
+ /* =======================================================
      RENDER MEAL CARD
   ======================================================= */
 
@@ -623,42 +687,174 @@ const generatePlan = async () => {
   />
 </View>
 
-        {/* =================================================
-            GENERATE BUTTON
-        ================================================= */}
+{/* DAY-SPECIFIC FOOD PREFERENCES */}
+<View
+  style={[
+    styles.card,
+    {
+      backgroundColor: colors.card,
+      borderColor: colors.border,
+    },
+  ]}
+>
+  <Text
+    style={[
+      styles.sectionTitle,
+      { color: colors.text },
+    ]}
+  >
+    Day-specific food preferences
+  </Text>
 
-        <TouchableOpacity
-          onPress={generatePlan}
-          disabled={loading}
-          style={[
-            styles.generateButton,
-            {
-              backgroundColor: colors.primary,
-              opacity: loading ? 0.7 : 1,
-            },
-          ]}
+  <Text
+    style={{
+      color: colors.textSecondary,
+      fontSize: 13,
+      marginBottom: 12,
+      lineHeight: 19,
+    }}
+  >
+    Choose a weekday and specify foods to avoid or include
+    on that day only.
+  </Text>
+
+  <Text style={{ color: colors.text, marginBottom: 8, fontWeight: "600" }}>
+    Select weekday
+  </Text>
+
+  
+<View
+  style={{
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginBottom: 16,
+  }}
+>
+  {weekdays.map(({ label, value }) => {
+  const selected = selectedWeekdays.includes(value);
+
+    return (
+      <TouchableOpacity
+        key={value}
+        disabled={loading}
+        onPress={() => toggleWeekday(value)}
+        style={{
+          paddingVertical: 10,
+          paddingHorizontal: 12,
+          borderRadius: 10,
+          borderWidth: 1,
+          borderColor: selected ? colors.primary : colors.border,
+          backgroundColor: selected ? colors.primary : colors.background,
+        }}
+      >
+        <Text
+          style={{
+            color: selected ? "#fff" : colors.text,
+            fontWeight: "600",
+          }}
         >
-          {loading ? (
-            <>
-              <ActivityIndicator color="#fff" />
+          {label.slice(0, 3)}
+        </Text>
+      </TouchableOpacity>
+    );
+  })}
+</View>
+  <Text style={{ color: colors.text, marginBottom: 8, fontWeight: "600" }}>
+    Preference
+  </Text>
 
-              <Text style={styles.generateText}>
-                Creating Meal Plan...
-              </Text>
-            </>
-          ) : (
-            <>
-              <RefreshCw
-                size={21}
-                color="#fff"
-              />
+  <View style={{ flexDirection: "row", gap: 10, marginBottom: 16 }}>
+    {(["avoid", "include"] as const).map((mode) => {
+      const selected = dayPreferenceMode === mode;
 
-              <Text style={styles.generateText}>
-                Generate Meal Plan
-              </Text>
-            </>
-          )}
+      return (
+        <TouchableOpacity
+          key={mode}
+          disabled={loading}
+          onPress={() => setDayPreferenceMode(mode)}
+          style={{
+            flex: 1,
+            padding: 12,
+            borderRadius: 10,
+            alignItems: "center",
+            borderWidth: 1,
+            borderColor: selected ? colors.primary : colors.border,
+            backgroundColor: selected ? colors.primary : colors.background,
+          }}
+        >
+          <Text
+            style={{
+              color: selected ? "#fff" : colors.text,
+              fontWeight: "600",
+            }}
+          >
+            {mode === "avoid" ? "Avoid foods" : "Include foods"}
+          </Text>
         </TouchableOpacity>
+      );
+    })}
+  </View>
+
+  <Text style={{ color: colors.text, marginBottom: 8, fontWeight: "600" }}>
+    Foods
+  </Text>
+
+  <TextInput
+    value={dayPreferenceFoods}
+    onChangeText={setDayPreferenceFoods}
+    placeholder="e.g. chicken, egg"
+    placeholderTextColor={colors.textSecondary}
+    editable={!loading}
+    autoCapitalize="none"
+    returnKeyType="done"
+    style={{
+      minHeight: 48,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 12,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      color: colors.text,
+      backgroundColor: colors.background,
+      fontSize: 15,
+    }}
+  />
+</View>
+
+
+{/* =================================================
+GENERATE BUTTON
+================================================= */}
+
+<TouchableOpacity
+  onPress={generatePlan}
+  disabled={loading}
+  style={[
+    styles.generateButton,
+    {
+      backgroundColor: colors.primary,
+      opacity: loading ? 0.7 : 1,
+    },
+  ]}
+>
+  {loading ? (
+    <>
+      <ActivityIndicator color="#fff" />
+      <Text style={styles.generateText}>
+        Creating Meal Plan...
+      </Text>
+    </>
+  ) : (
+    <>
+      <RefreshCw size={21} color="#fff" />
+      <Text style={styles.generateText}>
+        Generate Meal Plan
+      </Text>
+    </>
+  )}
+</TouchableOpacity>
+
 
 
         {/* =================================================

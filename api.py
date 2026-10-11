@@ -6,15 +6,14 @@ import os
 import firebase_admin
 from firebase_admin import auth as firebase_auth
 from firebase_admin import credentials
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
-from typing import Any, Dict, Optional
+from typing import Any,Optional
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from openai import AsyncOpenAI
-from pydantic import BaseModel
 
 from sqlalchemy import (
     Column,
@@ -109,10 +108,18 @@ class PantryCreateRequest(BaseModel):
     unit: str
 
 
+from pydantic import BaseModel, Field
+
+
 class MealPlanRequest(BaseModel):
     user_id: int = 1
     days: int = 1
-    excluded_ingredients: list[str] = []
+
+    excluded_ingredients: list[str] = Field(default_factory=list)
+
+    day_preferences: list[dict[str, Any]] = Field(
+        default_factory=list
+    )
 
 class PantryUpdateRequest(BaseModel):
     item: Optional[str] = None
@@ -1185,14 +1192,72 @@ async def generate_meal_plan(
                 status_code=400,
                 detail="Days must be between 1 and 7."
             )
+        
         excluded_ingredients = sorted(
-    {
-        item.strip()
-        for item in (request.excluded_ingredients or [])
-        if isinstance(item, str) and item.strip()
-    },
-    key=str.casefold,
-)
+            {
+                item.strip()
+                for item in (request.excluded_ingredients or [])
+                if isinstance(item, str) and item.strip()
+            },
+            key=str.casefold,
+        )
+
+        valid_weekdays = {
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday",
+        }
+
+        normalized_day_preferences = []
+
+        for preference in request.day_preferences:
+            weekday = str(
+                preference.get("day", "")
+            ).strip().casefold()
+
+            mode = str(
+                preference.get("mode", "")
+            ).strip().casefold()
+
+            foods = preference.get("foods", [])
+
+            if weekday not in valid_weekdays:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid weekday: {weekday}",
+                )
+
+            if mode not in {"avoid", "include"}:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Preference mode must be 'avoid' or 'include'.",
+                )
+
+            if not isinstance(foods, list):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Preference foods must be a list.",
+                )
+
+            clean_foods = sorted(
+                {
+                    food.strip()
+                    for food in foods
+                    if isinstance(food, str) and food.strip()
+                },
+                key=str.casefold,
+            )
+
+            if clean_foods:
+                normalized_day_preferences.append({
+                    "day": weekday,
+                    "mode": mode,
+                    "foods": clean_foods,
+                })
 
         user_profile = get_user_profile(
             db_session,
@@ -1220,6 +1285,7 @@ async def generate_meal_plan(
         ]
 
         meal_context = f"""
+
 You are creating a personalized meal plan.
 
 ================ USER PROFILE ================
@@ -1232,7 +1298,19 @@ You are creating a personalized meal plan.
 
 ================ REQUEST =====================
 
- Create a meal plan for {request.days} day(s).
+ 
+Create a meal plan for {request.days} day(s).
+
+================ DAY-SPECIFIC FOOD PREFERENCES ================
+
+{normalized_day_preferences}
+
+RULES:
+- Apply each preference only to its matching weekday.
+- For mode "avoid", do not use the specified foods in that weekday's meals.
+- For mode "include", try to include the specified foods in that weekday's meals.
+- Check meal names, descriptions, and ingredients.
+- Never violate the global excluded ingredients or the user's allergies.
 
 EXCLUDED INGREDIENTS:
 {excluded_ingredients if excluded_ingredients else "None"}
@@ -1338,19 +1416,23 @@ The number of objects in "days" must be exactly {request.days}.
             "\n==========================================================\n"
         )
 
+       
         try:
             meal_plan_data = parse_meal_plan_json(
                 meal_plan_text
             )
-        except Exception:
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+
+            print("MEAL PLAN OUTPUT TYPE:", type(meal_plan_text))
+            print("MEAL PLAN OUTPUT:", repr(meal_plan_text))
+
             raise HTTPException(
                 status_code=500,
-                detail=(
-                    "MealPlannerAgent returned invalid JSON. "
-                    "Update Agents/meal_agent.py so it returns "
-                    "only the required JSON structure."
-                ),
+                detail=f"Meal plan parsing failed: {type(e).__name__}: {e}",
             )
+
 
         days_data = meal_plan_data.get(
             "days",
@@ -1362,6 +1444,103 @@ The number of objects in "days" must be exactly {request.days}.
                 status_code=500,
                 detail="Meal plan JSON contains no valid days."
             )
+
+        
+        # ====================================================
+        # VALIDATE DAY-SPECIFIC AVOID PREFERENCES
+        # ====================================================
+
+        day_preference_violations = []
+
+        weekday_names = [
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday",
+        ]
+
+        today = date.today()
+
+        for index, day_data in enumerate(days_data):
+            if not isinstance(day_data, dict):
+                continue
+
+            try:
+                date_offset = int(day_data.get("date_offset", index))
+            except (TypeError, ValueError):
+                date_offset = index
+
+            plan_date = today + timedelta(days=date_offset)
+            plan_weekday = weekday_names[plan_date.weekday()]
+
+            meals = day_data.get("meals", [])
+            if not isinstance(meals, list):
+                continue
+
+            # Find preferences that apply to this actual weekday.
+            matching_preferences = [
+                preference
+                for preference in normalized_day_preferences
+                if preference["day"] == plan_weekday
+                and preference["mode"] == "avoid"
+            ]
+
+            if not matching_preferences:
+                continue
+
+            for meal in meals:
+                if not isinstance(meal, dict):
+                    continue
+
+                fields_to_check = [
+                    str(meal.get("meal_name", "")),
+                    str(meal.get("description", "")),
+                ]
+
+                ingredients = meal.get("ingredients", [])
+
+                if isinstance(ingredients, list):
+                    for ingredient in ingredients:
+                        if isinstance(ingredient, dict):
+                            fields_to_check.append(
+                                str(ingredient.get("item", ""))
+                            )
+
+                for preference in matching_preferences:
+                    for food in preference["foods"]:
+                        pattern = re.compile(
+                            r"(?<!\w)" + re.escape(food) + r"(?!\w)",
+                            re.IGNORECASE,
+                        )
+
+                        if any(
+                            pattern.search(value)
+                            for value in fields_to_check
+                        ):
+                            day_preference_violations.append({
+                                "day": plan_weekday,
+                                "meal": meal.get(
+                                    "meal_name",
+                                    "Unknown meal",
+                                ),
+                                "avoided_food": food,
+                            })
+
+        if day_preference_violations:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": (
+                        "The generated meal plan violates day-specific "
+                        "food preferences. No plan was saved."
+                    ),
+                    "violations": day_preference_violations,
+                },
+            )
+
 
 
         # ====================================================
@@ -1440,7 +1619,7 @@ The number of objects in "days" must be exactly {request.days}.
                             )
                         )
 
-                # ====================================================
+        # ====================================================
         # VALIDATE EXCLUDED INGREDIENTS
         # ====================================================
 
@@ -1496,7 +1675,6 @@ The number of objects in "days" must be exactly {request.days}.
                     "violations": violations,
                 },
             )
-        today = date.today()
 
         # Save the complete generated plan.
         saved_plan = save_meal_plan(
@@ -1625,11 +1803,6 @@ The number of objects in "days" must be exactly {request.days}.
 
     finally:
         db_session.close()
-
-
-# ============================================================
-# TODAY'S MEALS
-# ============================================================
 
 
 # ============================================================
