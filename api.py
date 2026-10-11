@@ -1536,7 +1536,12 @@ Malformed meal plan:
         # VALIDATE DAY-SPECIFIC AVOID PREFERENCES
         # ====================================================
 
-        day_preference_violations = []
+        
+        # ====================================================
+        # VALIDATE AND RETRY DAY-SPECIFIC AVOID PREFERENCES
+        # ====================================================
+
+        today = date.today()
 
         weekday_names = [
             "monday",
@@ -1548,84 +1553,163 @@ Malformed meal plan:
             "sunday",
         ]
 
-        today = date.today()
+        def find_preference_violations(plan_days):
+            found = []
 
-        for index, day_data in enumerate(days_data):
-            if not isinstance(day_data, dict):
-                continue
-
-            try:
-                date_offset = int(day_data.get("date_offset", index))
-            except (TypeError, ValueError):
-                date_offset = index
-
-            plan_date = today + timedelta(days=date_offset)
-            plan_weekday = weekday_names[plan_date.weekday()]
-
-            meals = day_data.get("meals", [])
-            if not isinstance(meals, list):
-                continue
-
-            # Find preferences that apply to this actual weekday.
-            matching_preferences = [
-                preference
-                for preference in normalized_day_preferences
-                if preference["day"] == plan_weekday
-                and preference["mode"] == "avoid"
-            ]
-
-            if not matching_preferences:
-                continue
-
-            for meal in meals:
-                if not isinstance(meal, dict):
+            for index, day_data in enumerate(plan_days):
+                if not isinstance(day_data, dict):
                     continue
 
-                fields_to_check = [
-                    str(meal.get("meal_name", "")),
-                    str(meal.get("description", "")),
+                try:
+                    date_offset = int(
+                        day_data.get("date_offset", index)
+                    )
+                except (TypeError, ValueError):
+                    date_offset = index
+
+                plan_date = today + timedelta(days=date_offset)
+                plan_weekday = weekday_names[plan_date.weekday()]
+
+                preferences = [
+                    preference
+                    for preference in normalized_day_preferences
+                    if preference["day"] == plan_weekday
+                    and preference["mode"] == "avoid"
                 ]
 
-                ingredients = meal.get("ingredients", [])
+                meals = day_data.get("meals", [])
 
-                if isinstance(ingredients, list):
-                    for ingredient in ingredients:
-                        if isinstance(ingredient, dict):
-                            fields_to_check.append(
-                                str(ingredient.get("item", ""))
+                if not isinstance(meals, list):
+                    continue
+
+                for meal in meals:
+                    if not isinstance(meal, dict):
+                        continue
+
+                    fields = [
+                        str(meal.get("meal_name", "")),
+                        str(meal.get("description", "")),
+                    ]
+
+                    ingredients = meal.get("ingredients", [])
+
+                    if isinstance(ingredients, list):
+                        for ingredient in ingredients:
+                            if isinstance(ingredient, dict):
+                                fields.append(
+                                    str(ingredient.get("item", ""))
+                                )
+
+                    for preference in preferences:
+                        for food in preference["foods"]:
+                            pattern = re.compile(
+                                r"(?<!\w)"
+                                + re.escape(food)
+                                + r"(?!\w)",
+                                re.IGNORECASE,
                             )
 
-                for preference in matching_preferences:
-                    for food in preference["foods"]:
-                        pattern = re.compile(
-                            r"(?<!\w)" + re.escape(food) + r"(?!\w)",
-                            re.IGNORECASE,
-                        )
+                            if any(pattern.search(value) for value in fields):
+                                found.append({
+                                    "day": plan_weekday,
+                                    "meal": meal.get(
+                                        "meal_name", "Unknown meal"
+                                    ),
+                                    "avoided_food": food,
+                                })
 
-                        if any(
-                            pattern.search(value)
-                            for value in fields_to_check
-                        ):
-                            day_preference_violations.append({
-                                "day": plan_weekday,
-                                "meal": meal.get(
-                                    "meal_name",
-                                    "Unknown meal",
-                                ),
-                                "avoided_food": food,
-                            })
+            return found
 
+        day_preference_violations = find_preference_violations(
+            days_data
+        )
+
+        # Retry generation once if the AI violates preferences.
         if day_preference_violations:
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "message": (
-                        "The generated meal plan violates day-specific "
-                        "food preferences. No plan was saved."
-                    ),
-                    "violations": day_preference_violations,
-                },
+            print(
+                "[Meal Plan] Preference violations found. "
+                "Regenerating the plan once."
             )
+
+            retry_context = f"""
+Generate a COMPLETE replacement meal plan.
+
+Original requirements:
+{meal_context}
+
+The previous plan violated these day-specific avoid preferences:
+{json.dumps(day_preference_violations, ensure_ascii=False)}
+
+You MUST correct every listed violation.
+Replace violating meals with suitable alternatives.
+Do not use an avoided food in a meal name, description,
+or ingredient on the applicable weekday.
+
+Return the same JSON schema as the original request.
+Return only valid JSON, with exactly {request.days} days.
+Preserve the user's other dietary requirements and restrictions.
+"""
+
+            try:
+                retry_result = await Runner.run(
+                    meal_agent,
+                    retry_context,
+                )
+
+                retry_text = retry_result.final_output
+                retry_data = parse_meal_plan_json(retry_text)
+                retry_days = retry_data.get("days", [])
+
+                if (
+                    not isinstance(retry_days, list)
+                    or len(retry_days) != request.days
+                ):
+                    raise ValueError(
+                        "Retry returned an invalid number of days."
+                    )
+
+                retry_violations = find_preference_violations(
+                    retry_days
+                )
+
+                if retry_violations:
+                    raise HTTPException(
+                        status_code=422,
+                        detail={
+                            "message": (
+                                "The replacement meal plan still violates "
+                                "day-specific food preferences. "
+                                "No plan was saved."
+                            ),
+                            "violations": retry_violations,
+                        },
+                    )
+
+                # Accept only the validated replacement plan.
+                meal_plan_data = retry_data
+                days_data = retry_days
+                meal_plan_text = retry_text
+
+                print(
+                    "[Meal Plan] Replacement plan passed "
+                    "day-specific preference validation."
+                )
+
+            except HTTPException:
+                raise
+
+            except Exception as retry_error:
+                import traceback
+                traceback.print_exc()
+
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "Could not regenerate a valid meal plan: "
+                        f"{type(retry_error).__name__}: {retry_error}"
+                    ),
+                )
+
 
 
 
