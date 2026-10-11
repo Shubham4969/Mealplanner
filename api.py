@@ -1283,6 +1283,7 @@ async def generate_meal_plan(request: MealPlanRequest):
         ]
 
         
+        
         meal_context = f"""
 
 You are creating a personalized meal plan.
@@ -1309,13 +1310,24 @@ STRICT RULES:
   returning the final JSON.
 - Return only valid JSON matching the required schema.
 
+FINAL VALIDATION BEFORE RETURNING JSON:
+
+For every generated day:
+1. Determine its actual weekday.
+2. Read all avoid preferences for that weekday.
+3. Check the meal name, description, and every ingredient.
+4. If any avoided food appears, replace that meal with
+   a suitable meal that contains none of the avoided food.
+5. Repeat the check until every meal satisfies all preferences.
+
+Do not return a meal plan with any preference violations.
+
 ================ PANTRY ======================
 
 {pantry_data}
 
 ================ REQUEST =====================
 
- 
 Create a meal plan for {request.days} day(s).
 
 ================ DAY-SPECIFIC FOOD PREFERENCES ================
