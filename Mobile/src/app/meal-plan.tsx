@@ -1,4 +1,6 @@
 import React, { useCallback, useState } from "react";
+import { useFocusEffect } from "expo-router";
+
 import {
   ActivityIndicator,
   ScrollView,
@@ -200,11 +202,28 @@ export default function MealPlanScreen() {
   ======================================================= */
 
 const loadSavedMealPlan = useCallback(async () => {
+  const startedAt = Date.now();
+
   try {
     setLoadingSavedPlan(true);
+    console.log("[MealPlan] Loading started");
 
     const userId = await getStoredUserId();
+
+    console.log(
+      "[MealPlan] User ID loaded in",
+      Date.now() - startedAt,
+      "ms"
+    );
+
+    const apiStartedAt = Date.now();
     const response = await getMealPlan(userId);
+
+    console.log(
+      "[MealPlan] API request took",
+      Date.now() - apiStartedAt,
+      "ms"
+    );
 
     console.log("Saved meal plan:", response);
 
@@ -219,13 +238,26 @@ const loadSavedMealPlan = useCallback(async () => {
     } else {
       setMealPlan(null);
     }
+
+    console.log(
+      "[MealPlan] Total loading time:",
+      Date.now() - startedAt,
+      "ms"
+    );
   } catch (error) {
-    console.error("Load meal plan error:", error);
+    console.error("[MealPlan] Load error:", error);
     setMealPlan(null);
   } finally {
     setLoadingSavedPlan(false);
   }
 }, []);
+
+
+useFocusEffect(
+  useCallback(() => {
+    loadSavedMealPlan();
+  }, [loadSavedMealPlan])
+);
 
 
   /* =======================================================
