@@ -167,13 +167,13 @@ export default function MealPlanScreen() {
 
   // Multiple weekday selection
   const [selectedWeekdays, setSelectedWeekdays] =
-    useState<Weekday[]>(["tuesday"]);
+    useState<Weekday[]>([]);
 
   const [dayPreferenceMode, setDayPreferenceMode] =
     useState<"avoid" | "include">("avoid");
 
   const [dayPreferenceFoods, setDayPreferenceFoods] =
-    useState("chicken");
+    useState("");
 
   // Weekday labels
   const weekdays: { label: string; value: Weekday }[] = [
